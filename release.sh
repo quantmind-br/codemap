@@ -76,8 +76,9 @@ echo "Calculated SHA256: $SHA256"
 # 7. Update codemap.rb locally
 echo "Updating $FORMULA_FILE..."
 # Use sed to replace url and sha256 (macOS compatible sed -i '')
-sed -i '' "s|url \".*\"|url \"$TARBALL_URL\"|" "$FORMULA_FILE"
-sed -i '' "s|sha256 \".*\"|sha256 \"$SHA256\"|" "$FORMULA_FILE"
+# We match "url" and "sha256" at the start of the line (indented) to avoid matching the resource block
+sed -i '' "s|^  url \".*\"|  url \"$TARBALL_URL\"|" "$FORMULA_FILE"
+sed -i '' "s|^  sha256 \".*\"|  sha256 \"$SHA256\"|" "$FORMULA_FILE"
 
 # 8. Push local changes
 echo "Committing updated formula to main repo..."

@@ -11,8 +11,8 @@ class Codemap < Formula
   include Language::Python::Virtualenv
 
   resource "rich" do
-    url "https://github.com/JordanCoin/codemap/archive/refs/tags/v1.1.tar.gz"
-    sha256 "8ed89a8cb434558ccc17f2727abc0d586f55802fcb300b5b007011e97ba8f34d"
+    url "https://files.pythonhosted.org/packages/source/r/rich/rich-13.7.1.tar.gz"
+    sha256 "9be308cb1fe2f1f57d67ce99e95af38a1e2bc71ad9813b0e247cf7ffbcc3a432"
   end
 
   # Add other python dependencies if needed (e.g. markdown-it-py, pygments, etc.)
