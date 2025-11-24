@@ -22,7 +22,7 @@
 ### Homebrew
 
 ```bash
-brew tap jordancoin/codemap
+brew tap JordanCoin/tap
 brew install codemap
 ```
 
