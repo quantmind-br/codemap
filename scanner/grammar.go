@@ -116,9 +116,9 @@ func (l *GrammarLoader) LoadLanguage(lang string) error {
 	}
 
 	// Get language function
-	var langFunc func() uintptr
+	var langFunc func() unsafe.Pointer
 	purego.RegisterLibFunc(&langFunc, lib, fmt.Sprintf("tree_sitter_%s", lang))
-	language := tree_sitter.NewLanguage(unsafe.Pointer(langFunc()))
+	language := tree_sitter.NewLanguage(langFunc())
 
 	// Load query
 	queryBytes, err := queryFiles.ReadFile(fmt.Sprintf("queries/%s.scm", lang))
