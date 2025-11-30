@@ -8,67 +8,67 @@ class Codemap < Formula
   depends_on "go" => :build
 
   resource "tree-sitter-go" do
-    url "https://github.com/tree-sitter/tree-sitter-go.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-go/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-python" do
-    url "https://github.com/tree-sitter/tree-sitter-python.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-python/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-javascript" do
-    url "https://github.com/tree-sitter/tree-sitter-javascript.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-javascript/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-typescript" do
-    url "https://github.com/tree-sitter/tree-sitter-typescript.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-typescript/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-rust" do
-    url "https://github.com/tree-sitter/tree-sitter-rust.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-rust/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-ruby" do
-    url "https://github.com/tree-sitter/tree-sitter-ruby.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-ruby/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-c" do
-    url "https://github.com/tree-sitter/tree-sitter-c.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-c/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-cpp" do
-    url "https://github.com/tree-sitter/tree-sitter-cpp.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-cpp/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-java" do
-    url "https://github.com/tree-sitter/tree-sitter-java.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-java/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-swift" do
-    url "https://github.com/tree-sitter/tree-sitter-swift.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-swift/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-bash" do
-    url "https://github.com/tree-sitter/tree-sitter-bash.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-bash/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-kotlin" do
-    url "https://github.com/fwcd/tree-sitter-kotlin.git", branch: "main"
+    url "https://github.com/fwcd/tree-sitter-kotlin/archive/refs/heads/main.tar.gz"
   end
 
   resource "tree-sitter-c-sharp" do
-    url "https://github.com/tree-sitter/tree-sitter-c-sharp.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-c-sharp/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-php" do
-    url "https://github.com/tree-sitter/tree-sitter-php.git", branch: "master"
+    url "https://github.com/tree-sitter/tree-sitter-php/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-dart" do
-    url "https://github.com/UserNobody14/tree-sitter-dart.git", branch: "master"
+    url "https://github.com/UserNobody14/tree-sitter-dart/archive/refs/heads/master.tar.gz"
   end
 
   resource "tree-sitter-r" do
-    url "https://github.com/r-lib/tree-sitter-r.git", branch: "main"
+    url "https://github.com/r-lib/tree-sitter-r/archive/refs/heads/main.tar.gz"
   end
 
   def install
