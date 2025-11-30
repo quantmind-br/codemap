@@ -359,3 +359,61 @@ jobs:
             artifacts/**/*.zip
             artifacts/**/*.tar.gz
           generate_release_notes: true
+
+  update-scoop:
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'  # Only on tag push, not manual workflow
+    steps:
+      - name: Wait for release assets
+        run: sleep 30  # Give GitHub time to process release assets
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Download Windows zip and get hash
+        id: hash
+        run: |
+          curl -L -o codemap.zip "https://github.com/JordanCoin/codemap/releases/download/${GITHUB_REF_NAME}/codemap-windows-amd64.zip"
+          SHA256=$(sha256sum codemap.zip | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Update Scoop manifest
+        uses: actions/checkout@v4
+        with:
+          repository: JordanCoin/scoop-codemap
+          token: ${{ secrets.SCOOP_TOKEN }}
+          path: scoop-bucket
+
+      - name: Update manifest and push
+        run: |
+          cd scoop-bucket
+          cat > codemap.json << EOF
+          {
+            "version": "${{ steps.version.outputs.version }}",
+            "description": "Generate a brain map of your codebase for LLM context",
+            "homepage": "https://github.com/JordanCoin/codemap",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/JordanCoin/codemap/releases/download/${GITHUB_REF_NAME}/codemap-windows-amd64.zip",
+                "hash": "${{ steps.hash.outputs.sha256 }}"
+              }
+            },
+            "bin": "codemap-windows-amd64\\\\codemap.exe",
+            "checkver": "github",
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/JordanCoin/codemap/releases/download/v\$version/codemap-windows-amd64.zip"
+                }
+              }
+            }
+          }
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add codemap.json
+          git commit -m "Update codemap to ${{ steps.version.outputs.version }}"
+          git push
