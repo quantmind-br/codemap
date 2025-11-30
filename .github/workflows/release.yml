@@ -1,0 +1,256 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      skip_release:
+        description: 'Build artifacts only (no GitHub release)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  # Grammar repos and their source directories
+  GRAMMARS: |
+    go:tree-sitter/tree-sitter-go:master:src
+    python:tree-sitter/tree-sitter-python:master:src
+    javascript:tree-sitter/tree-sitter-javascript:master:src
+    typescript:tree-sitter/tree-sitter-typescript:master:typescript/src
+    rust:tree-sitter/tree-sitter-rust:master:src
+    ruby:tree-sitter/tree-sitter-ruby:master:src
+    c:tree-sitter/tree-sitter-c:master:src
+    cpp:tree-sitter/tree-sitter-cpp:master:src
+    java:tree-sitter/tree-sitter-java:master:src
+    swift:tree-sitter/tree-sitter-swift:master:src
+    bash:tree-sitter/tree-sitter-bash:master:src
+    kotlin:fwcd/tree-sitter-kotlin:main:src
+    c_sharp:tree-sitter/tree-sitter-c-sharp:master:src
+    php:tree-sitter/tree-sitter-php:master:php/src
+    dart:UserNobody14/tree-sitter-dart:master:src
+    r:r-lib/tree-sitter-r:main:src
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            zig_target: x86_64-macos
+            lib_ext: dylib
+            archive_ext: tar.gz
+            name: codemap-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            zig_target: aarch64-macos
+            lib_ext: dylib
+            archive_ext: tar.gz
+            name: codemap-darwin-arm64
+          - goos: linux
+            goarch: amd64
+            zig_target: x86_64-linux-gnu
+            lib_ext: so
+            archive_ext: tar.gz
+            name: codemap-linux-amd64
+          - goos: linux
+            goarch: arm64
+            zig_target: aarch64-linux-gnu
+            lib_ext: so
+            archive_ext: tar.gz
+            name: codemap-linux-arm64
+          - goos: windows
+            goarch: amd64
+            zig_target: x86_64-windows-gnu
+            lib_ext: dll
+            archive_ext: zip
+            name: codemap-windows-amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.11.0
+
+      - name: Create zig wrapper scripts
+        run: |
+          # Create wrapper scripts for zig cc/c++
+          mkdir -p "$HOME/zigcc"
+
+          cat > "$HOME/zigcc/zcc" << 'SCRIPT'
+          #!/bin/sh
+          zig cc -target $ZIG_TARGET $@
+          SCRIPT
+
+          cat > "$HOME/zigcc/zxx" << 'SCRIPT'
+          #!/bin/sh
+          zig c++ -target $ZIG_TARGET $@
+          SCRIPT
+
+          chmod +x "$HOME/zigcc/zcc" "$HOME/zigcc/zxx"
+
+      - name: Build Go binary with CGO
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          ZIG_TARGET: ${{ matrix.zig_target }}
+          CGO_ENABLED: 1
+          CC: ${{ github.workspace }}/../../../home/runner/zigcc/zcc
+          CXX: ${{ github.workspace }}/../../../home/runner/zigcc/zxx
+        run: |
+          export CC="$HOME/zigcc/zcc"
+          export CXX="$HOME/zigcc/zxx"
+
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            go build -o codemap.exe .
+          else
+            go build -o codemap .
+          fi
+
+      - name: Download and build grammars
+        run: |
+          mkdir -p grammars
+
+          echo "$GRAMMARS" | while IFS=: read -r lang repo branch src_dir; do
+            [ -z "$lang" ] && continue
+            echo "Building $lang from $repo ($branch) - src: $src_dir"
+
+            # Download tarball
+            curl -sL "https://github.com/$repo/archive/refs/heads/$branch.tar.gz" | tar xz
+
+            # Find extracted directory (handle various naming patterns)
+            extracted_dir=$(ls -d */ 2>/dev/null | head -1)
+            src_path="${extracted_dir}${src_dir}"
+
+            echo "  Source path: $src_path"
+
+            if [ ! -d "$src_path" ]; then
+              echo "  ✗ Source directory not found: $src_path"
+              rm -rf "$extracted_dir"
+              continue
+            fi
+
+            # Determine sources to compile
+            sources="$src_path/parser.c"
+            extra_flags=""
+
+            if [ -f "$src_path/scanner.c" ]; then
+              echo "  Including scanner.c"
+              sources="$sources $src_path/scanner.c"
+            elif [ -f "$src_path/scanner.cc" ]; then
+              echo "  Including scanner.cc (C++)"
+              # For C++ scanner, compile separately then link
+              zig c++ -target ${{ matrix.zig_target }} -c -fPIC \
+                -I"$src_path" \
+                "$src_path/scanner.cc" \
+                -o scanner.o 2>&1 || echo "  Warning: C++ scanner compile issue"
+              if [ -f scanner.o ]; then
+                sources="$sources scanner.o"
+              fi
+            fi
+
+            # Compile shared library
+            zig cc -target ${{ matrix.zig_target }} -shared -fPIC \
+              -I"$src_path" \
+              $sources \
+              -o "grammars/libtree-sitter-$lang.${{ matrix.lib_ext }}" 2>&1 || \
+              echo "  Warning: Build had issues"
+
+            # Cleanup
+            rm -rf "$extracted_dir" scanner.o 2>/dev/null
+
+            # Verify
+            if [ -f "grammars/libtree-sitter-$lang.${{ matrix.lib_ext }}" ]; then
+              size=$(ls -lh "grammars/libtree-sitter-$lang.${{ matrix.lib_ext }}" | awk '{print $5}')
+              echo "  ✓ Built libtree-sitter-$lang.${{ matrix.lib_ext }} ($size)"
+            else
+              echo "  ✗ Failed to build $lang"
+            fi
+          done
+
+          echo ""
+          echo "=== Built grammars ==="
+          ls -lh grammars/ || echo "No grammars built"
+
+      - name: Create release archive
+        run: |
+          mkdir -p release/${{ matrix.name }}
+
+          # Copy binary
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cp codemap.exe release/${{ matrix.name }}/
+          else
+            cp codemap release/${{ matrix.name }}/
+          fi
+
+          # Copy grammars
+          if [ -d grammars ] && [ "$(ls -A grammars)" ]; then
+            cp -r grammars release/${{ matrix.name }}/
+          fi
+
+          # Copy queries
+          cp -r scanner/queries release/${{ matrix.name }}/
+
+          # Create README for the release
+          cat > release/${{ matrix.name }}/README.txt << 'EOF'
+          codemap - Generate a brain map of your codebase for LLM context
+
+          Usage:
+            codemap .              # Project structure
+            codemap --deps         # Dependency flow
+            codemap --diff         # Changed files vs main
+
+          The grammars/ folder contains tree-sitter parsers for --deps mode.
+          Make sure to keep grammars/ next to the codemap binary, or set:
+            CODEMAP_GRAMMAR_DIR=/path/to/grammars
+
+          More info: https://github.com/JordanCoin/codemap
+          EOF
+
+          # Create archive
+          cd release
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            zip -r ../${{ matrix.name }}.zip ${{ matrix.name }}
+          else
+            tar -czvf ../${{ matrix.name }}.tar.gz ${{ matrix.name }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.${{ matrix.archive_ext }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.skip_release == false)
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+          generate_release_notes: true
