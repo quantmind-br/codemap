@@ -359,7 +359,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: JordanCoin/homebrew-tap
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          token: ${{ secrets.SCOOP_TOKEN }}
           path: homebrew-tap
 
       - name: Update formula
