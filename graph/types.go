@@ -90,16 +90,17 @@ func GenerateNodeID(path, symbol string) NodeID {
 
 // Node represents a code entity in the knowledge graph.
 type Node struct {
-	ID        NodeID   `json:"id"`
-	Kind      NodeKind `json:"kind"`
-	Name      string   `json:"name"`
-	Path      string   `json:"path"`                // File path relative to project root
-	Line      int      `json:"line,omitempty"`      // Line number (1-indexed)
-	EndLine   int      `json:"end_line,omitempty"`  // End line number
-	Signature string   `json:"signature,omitempty"` // Function/method signature
-	DocString string   `json:"doc,omitempty"`       // Documentation comment
-	Exported  bool     `json:"exported,omitempty"`  // Is publicly visible
-	Package   string   `json:"package,omitempty"`   // Package/module name
+	ID         NodeID   `json:"id"`
+	Kind       NodeKind `json:"kind"`
+	Name       string   `json:"name"`
+	Path       string   `json:"path"`                  // File path relative to project root
+	Line       int      `json:"line,omitempty"`        // Line number (1-indexed)
+	EndLine    int      `json:"end_line,omitempty"`    // End line number
+	Signature  string   `json:"signature,omitempty"`   // Function/method signature
+	DocString  string   `json:"doc,omitempty"`         // Documentation comment
+	Exported   bool     `json:"exported,omitempty"`    // Is publicly visible
+	Package    string   `json:"package,omitempty"`     // Package/module name
+	ParamCount int      `json:"param_count,omitempty"` // For functions: parameter count (-1 = variadic)
 }
 
 // Edge represents a relationship between two nodes.
@@ -107,9 +108,10 @@ type Edge struct {
 	From     NodeID   `json:"from"`
 	To       NodeID   `json:"to"`
 	Kind     EdgeKind `json:"kind"`
-	Line     int      `json:"line,omitempty"`     // Line where the reference occurs
-	Weight   float64  `json:"weight,omitempty"`   // Relationship strength (0-1)
-	CallSite string   `json:"callsite,omitempty"` // For calls: the call expression text
+	Line     int      `json:"line,omitempty"`      // Line where the reference occurs
+	Weight   float64  `json:"weight,omitempty"`    // Relationship strength (0-1)
+	CallSite string   `json:"callsite,omitempty"`  // For calls: the call expression text
+	ArgCount int      `json:"arg_count,omitempty"` // For calls: number of arguments
 }
 
 // CodeGraph is the main knowledge graph structure with indexed lookups.
@@ -233,6 +235,55 @@ func (g *CodeGraph) RebuildIndexes() {
 		g.nodesByName[n.Name] = append(g.nodesByName[n.Name], n)
 	}
 
+	for _, e := range g.Edges {
+		g.edgesByFrom[e.From] = append(g.edgesByFrom[e.From], e)
+		g.edgesByTo[e.To] = append(g.edgesByTo[e.To], e)
+	}
+}
+
+// RemoveNodesForPath removes all nodes and edges associated with a file path.
+// Used for incremental updates when a file changes.
+func (g *CodeGraph) RemoveNodesForPath(path string) {
+	// Collect node IDs to remove
+	nodesToRemove := make(map[NodeID]bool)
+	for _, node := range g.nodesByPath[path] {
+		nodesToRemove[node.ID] = true
+		delete(g.Nodes, node.ID)
+		g.NodeCount--
+	}
+
+	// Remove from nodesByName index
+	for name, nodes := range g.nodesByName {
+		var filtered []*Node
+		for _, n := range nodes {
+			if !nodesToRemove[n.ID] {
+				filtered = append(filtered, n)
+			}
+		}
+		if len(filtered) > 0 {
+			g.nodesByName[name] = filtered
+		} else {
+			delete(g.nodesByName, name)
+		}
+	}
+
+	// Remove from nodesByPath
+	delete(g.nodesByPath, path)
+
+	// Remove edges involving these nodes
+	var newEdges []*Edge
+	for _, edge := range g.Edges {
+		if !nodesToRemove[edge.From] && !nodesToRemove[edge.To] {
+			newEdges = append(newEdges, edge)
+		} else {
+			g.EdgeCount--
+		}
+	}
+	g.Edges = newEdges
+
+	// Rebuild edge indexes
+	g.edgesByFrom = make(map[NodeID][]*Edge)
+	g.edgesByTo = make(map[NodeID][]*Edge)
 	for _, e := range g.Edges {
 		g.edgesByFrom[e.From] = append(g.edgesByFrom[e.From], e)
 		g.edgesByTo[e.To] = append(g.edgesByTo[e.To], e)

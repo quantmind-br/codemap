@@ -10,7 +10,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
+	"codemap/analyze"
+	"codemap/cache"
+	"codemap/config"
+	"codemap/graph"
 	"codemap/render"
 	"codemap/scanner"
 
@@ -55,10 +60,43 @@ type SymbolInput struct {
 	File string `json:"file,omitempty" jsonschema:"Filter to specific file path (substring match)"`
 }
 
+type TracePathInput struct {
+	Path  string `json:"path" jsonschema:"Path to the project directory"`
+	From  string `json:"from" jsonschema:"Source symbol name to trace from"`
+	To    string `json:"to" jsonschema:"Target symbol name to trace to"`
+	Depth int    `json:"depth,omitempty" jsonschema:"Maximum traversal depth (default: 5)"`
+}
+
+type CallersInput struct {
+	Path   string `json:"path" jsonschema:"Path to the project directory"`
+	Symbol string `json:"symbol" jsonschema:"Symbol name to find callers for"`
+	Depth  int    `json:"depth,omitempty" jsonschema:"Depth of caller chain (default: 1, max: 5)"`
+}
+
+type CalleesInput struct {
+	Path   string `json:"path" jsonschema:"Path to the project directory"`
+	Symbol string `json:"symbol" jsonschema:"Symbol name to find callees for"`
+	Depth  int    `json:"depth,omitempty" jsonschema:"Depth of callee chain (default: 1, max: 5)"`
+}
+
+type ExplainSymbolInput struct {
+	Path    string `json:"path" jsonschema:"Path to the project directory"`
+	Symbol  string `json:"symbol" jsonschema:"Symbol name to explain (function, type, method)"`
+	Model   string `json:"model,omitempty" jsonschema:"LLM model to use (overrides config)"`
+	NoCache bool   `json:"no_cache,omitempty" jsonschema:"Bypass cache for this request"`
+}
+
+type SummarizeModuleInput struct {
+	Path    string `json:"path" jsonschema:"Path to the project directory"`
+	Module  string `json:"module" jsonschema:"Module/directory path to summarize (relative to project)"`
+	Model   string `json:"model,omitempty" jsonschema:"LLM model to use (overrides config)"`
+	NoCache bool   `json:"no_cache,omitempty" jsonschema:"Bypass cache for this request"`
+}
+
 func main() {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "codemap",
-		Version: "2.0.0",
+		Version: "2.2.0",
 	}, nil)
 
 	// Tool: get_structure - Get project tree view
@@ -108,6 +146,36 @@ func main() {
 		Name:        "get_symbol",
 		Description: "Search for functions and types by name. Returns matching symbols with file location (path:line). Use this to find specific code elements without browsing files. Supports filtering by kind (function/type) and file path.",
 	}, handleGetSymbol)
+
+	// Tool: trace_path - Find path between two symbols
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "trace_path",
+		Description: "Find the connection path between two symbols in the call graph. Requires a pre-built index (run 'codemap --index' first). Returns the chain of calls connecting the source to the target.",
+	}, handleTracePath)
+
+	// Tool: get_callers - Find what calls a symbol
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_callers",
+		Description: "Find all functions that call a specific symbol. Requires a pre-built index (run 'codemap --index' first). Returns the caller chain showing who calls the target symbol.",
+	}, handleGetCallers)
+
+	// Tool: get_callees - Find what a symbol calls
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_callees",
+		Description: "Find all functions called by a specific symbol. Requires a pre-built index (run 'codemap --index' first). Returns the callee chain showing what the source symbol calls.",
+	}, handleGetCallees)
+
+	// Tool: explain_symbol - LLM-powered code explanation
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "explain_symbol",
+		Description: "Explain a code symbol (function, type, method) using LLM. Requires a pre-built index (run 'codemap --index' first) and configured LLM provider. Returns a natural language explanation of what the code does.",
+	}, handleExplainSymbol)
+
+	// Tool: summarize_module - LLM-powered module summary
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "summarize_module",
+		Description: "Summarize a module/directory using LLM. Reads source files and generates a high-level overview of the module's purpose, components, and dependencies. Requires a configured LLM provider.",
+	}, handleSummarizeModule)
 
 	// Run server on stdio
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
@@ -177,6 +245,21 @@ func handleGetStructure(ctx context.Context, req *mcp.CallToolRequest, input Pat
 	output := captureOutput(func() {
 		render.Tree(project)
 	})
+
+	// If graph exists, append summary statistics
+	if g, err := loadGraph(absRoot); err == nil {
+		stats := g.GetStats()
+		var sb strings.Builder
+		sb.WriteString(output)
+		sb.WriteString("\n───────────────────────────────────\n")
+		sb.WriteString("Knowledge Graph (pre-indexed):\n")
+		sb.WriteString(fmt.Sprintf("  Nodes: %d (functions: %d, types: %d)\n",
+			stats.TotalNodes, stats.FunctionCount, stats.NodesByKind["type"]))
+		sb.WriteString(fmt.Sprintf("  Edges: %d (calls: %d, imports: %d)\n",
+			stats.TotalEdges, stats.EdgesByKind["calls"], stats.EdgesByKind["imports"]))
+		sb.WriteString("\n  Use trace_path, get_callers, get_callees for call graph queries.\n")
+		output = sb.String()
+	}
 
 	return textResult(output), nil, nil
 }
@@ -299,20 +382,25 @@ func handleStatus(ctx context.Context, req *mcp.CallToolRequest, input EmptyInpu
 	cwd, _ := os.Getwd()
 	home := os.Getenv("HOME")
 
-	return textResult(fmt.Sprintf(`codemap MCP server v2.0.0
+	return textResult(fmt.Sprintf(`codemap MCP server v2.2.0
 Status: connected
 Local filesystem access: enabled
 Working directory: %s
 Home directory: %s
 
 Available tools:
-  list_projects    - Discover projects in a directory
-  get_structure    - Project tree view
-  get_dependencies - Import/function analysis
-  get_diff         - Changed files vs branch
-  find_file        - Search by filename
-  get_importers    - Find what imports a file
-  get_symbol       - Search for functions/types by name`, cwd, home)), nil, nil
+  list_projects      - Discover projects in a directory
+  get_structure      - Project tree view
+  get_dependencies   - Import/function analysis
+  get_diff           - Changed files vs branch
+  find_file          - Search by filename
+  get_importers      - Find what imports a file
+  get_symbol         - Search for functions/types by name
+  trace_path         - Find call path between symbols (requires index)
+  get_callers        - Find what calls a symbol (requires index)
+  get_callees        - Find what a symbol calls (requires index)
+  explain_symbol     - LLM-powered code explanation (requires index + LLM)
+  summarize_module   - LLM-powered module summary (requires LLM)`, cwd, home)), nil, nil
 }
 
 func handleListProjects(ctx context.Context, req *mcp.CallToolRequest, input ListProjectsInput) (*mcp.CallToolResult, any, error) {
@@ -567,4 +655,448 @@ func captureOutput(f func()) string {
 	var buf bytes.Buffer
 	buf.ReadFrom(r)
 	return stripANSI(buf.String())
+}
+
+// loadGraph loads the knowledge graph for a project, or returns an error if not indexed
+func loadGraph(projectPath string) (*graph.CodeGraph, error) {
+	graphPath := filepath.Join(projectPath, ".codemap", "graph.gob")
+	if _, err := os.Stat(graphPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("no index found. Run 'codemap --index %s' first", projectPath)
+	}
+	return graph.LoadBinary(graphPath)
+}
+
+func handleTracePath(ctx context.Context, req *mcp.CallToolRequest, input TracePathInput) (*mcp.CallToolResult, any, error) {
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	g, err := loadGraph(absRoot)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	// Find source nodes matching "from"
+	fromNodes := g.FindNodesByPattern(input.From, []graph.NodeKind{graph.KindFunction, graph.KindMethod})
+	if len(fromNodes) == 0 {
+		return errorResult(fmt.Sprintf("No function/method found matching '%s'", input.From)), nil, nil
+	}
+
+	// Find target nodes matching "to"
+	toNodes := g.FindNodesByPattern(input.To, []graph.NodeKind{graph.KindFunction, graph.KindMethod})
+	if len(toNodes) == 0 {
+		return errorResult(fmt.Sprintf("No function/method found matching '%s'", input.To)), nil, nil
+	}
+
+	depth := input.Depth
+	if depth <= 0 {
+		depth = 5
+	}
+
+	// Try to find path between any from/to combination
+	var result *graph.PathResult
+	for _, from := range fromNodes {
+		for _, to := range toNodes {
+			if from.ID == to.ID {
+				continue
+			}
+			if path := g.FindPath(from.ID, to.ID, depth); path != nil {
+				result = path
+				break
+			}
+		}
+		if result != nil {
+			break
+		}
+	}
+
+	if result == nil {
+		return textResult(fmt.Sprintf("No path found between '%s' and '%s' within depth %d", input.From, input.To, depth)), nil, nil
+	}
+
+	// Format output
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Path: %s → %s ===\n", input.From, input.To))
+	sb.WriteString(fmt.Sprintf("Length: %d hops\n\n", result.Length))
+
+	for i, node := range result.Path {
+		prefix := "├─"
+		if i == len(result.Path)-1 {
+			prefix = "└─"
+		}
+		sb.WriteString(fmt.Sprintf("%s %s (%s:%d)\n", prefix, node.Name, node.Path, node.Line))
+		if i < len(result.Edges) {
+			edge := result.Edges[i]
+			sb.WriteString(fmt.Sprintf("   │ %s\n", edge.Kind.String()))
+		}
+	}
+
+	return textResult(sb.String()), nil, nil
+}
+
+func handleGetCallers(ctx context.Context, req *mcp.CallToolRequest, input CallersInput) (*mcp.CallToolResult, any, error) {
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	g, err := loadGraph(absRoot)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	// Find nodes matching the symbol
+	nodes := g.FindNodesByPattern(input.Symbol, []graph.NodeKind{graph.KindFunction, graph.KindMethod})
+	if len(nodes) == 0 {
+		return errorResult(fmt.Sprintf("No function/method found matching '%s'", input.Symbol)), nil, nil
+	}
+
+	depth := input.Depth
+	if depth <= 0 {
+		depth = 1
+	}
+	if depth > 5 {
+		depth = 5
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Callers of '%s' ===\n\n", input.Symbol))
+
+	totalCallers := 0
+	for _, node := range nodes {
+		callerTree := g.GetReverseTree(node.ID, depth)
+		if len(callerTree) <= 1 { // Only has the node itself
+			continue
+		}
+
+		sb.WriteString(fmt.Sprintf("Target: %s (%s:%d)\n", node.Name, node.Path, node.Line))
+
+		for level := 1; level <= depth; level++ {
+			callers := callerTree[level]
+			if len(callers) == 0 {
+				continue
+			}
+			for _, caller := range callers {
+				indent := strings.Repeat("  ", level-1)
+				sb.WriteString(fmt.Sprintf("%s├─ %s (%s:%d)\n", indent, caller.Name, caller.Path, caller.Line))
+				totalCallers++
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if totalCallers == 0 {
+		return textResult(fmt.Sprintf("No callers found for '%s'", input.Symbol)), nil, nil
+	}
+
+	sb.WriteString(fmt.Sprintf("───────────────────────────────────\nTotal callers: %d\n", totalCallers))
+	return textResult(sb.String()), nil, nil
+}
+
+func handleGetCallees(ctx context.Context, req *mcp.CallToolRequest, input CalleesInput) (*mcp.CallToolResult, any, error) {
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	g, err := loadGraph(absRoot)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	// Find nodes matching the symbol
+	nodes := g.FindNodesByPattern(input.Symbol, []graph.NodeKind{graph.KindFunction, graph.KindMethod})
+	if len(nodes) == 0 {
+		return errorResult(fmt.Sprintf("No function/method found matching '%s'", input.Symbol)), nil, nil
+	}
+
+	depth := input.Depth
+	if depth <= 0 {
+		depth = 1
+	}
+	if depth > 5 {
+		depth = 5
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Callees of '%s' ===\n\n", input.Symbol))
+
+	totalCallees := 0
+	for _, node := range nodes {
+		calleeTree := g.GetDependencyTree(node.ID, depth)
+		if len(calleeTree) <= 1 { // Only has the node itself
+			continue
+		}
+
+		sb.WriteString(fmt.Sprintf("Source: %s (%s:%d)\n", node.Name, node.Path, node.Line))
+
+		for level := 1; level <= depth; level++ {
+			callees := calleeTree[level]
+			if len(callees) == 0 {
+				continue
+			}
+			for _, callee := range callees {
+				indent := strings.Repeat("  ", level-1)
+				sb.WriteString(fmt.Sprintf("%s├─ %s (%s:%d)\n", indent, callee.Name, callee.Path, callee.Line))
+				totalCallees++
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	if totalCallees == 0 {
+		return textResult(fmt.Sprintf("No callees found for '%s'", input.Symbol)), nil, nil
+	}
+
+	sb.WriteString(fmt.Sprintf("───────────────────────────────────\nTotal callees: %d\n", totalCallees))
+	return textResult(sb.String()), nil, nil
+}
+
+func handleExplainSymbol(ctx context.Context, req *mcp.CallToolRequest, input ExplainSymbolInput) (*mcp.CallToolResult, any, error) {
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	if input.Symbol == "" {
+		return errorResult("symbol is required"), nil, nil
+	}
+
+	// Load graph to find symbol
+	g, err := loadGraph(absRoot)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	// Find matching nodes
+	nodes := g.FindNodesByPattern(input.Symbol, nil)
+	if len(nodes) == 0 {
+		return errorResult(fmt.Sprintf("No symbols found matching '%s'", input.Symbol)), nil, nil
+	}
+
+	// Use first match
+	node := nodes[0]
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	if input.Model != "" {
+		cfg.LLM.Model = input.Model
+	}
+
+	// Create LLM client
+	client, err := analyze.NewClient(cfg)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Error creating LLM client: %v. Check your configuration.", err)), nil, nil
+	}
+
+	// Check connectivity
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := client.Ping(pingCtx); err != nil {
+		return errorResult(fmt.Sprintf("Error connecting to LLM provider (%s): %v", client.Name(), err)), nil, nil
+	}
+
+	// Read source code
+	source, err := analyze.ReadSymbolSource(absRoot, node)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Error reading source: %v", err)), nil, nil
+	}
+
+	// Initialize cache
+	cacheOpts := cache.Options{
+		Dir:     filepath.Join(absRoot, ".codemap", "cache"),
+		Enabled: !input.NoCache && cfg.Cache.Enabled,
+	}
+	responseCache, _ := cache.New(cacheOpts)
+
+	// Check cache
+	operation := "explain"
+	if responseCache != nil && responseCache.Enabled() {
+		if entry, ok := responseCache.GetByContentHash(source.ContentHash, operation, cfg.LLM.Model); ok {
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("=== %s ===\n", node.Name))
+			sb.WriteString(fmt.Sprintf("Path: %s:%d\n", node.Path, node.Line))
+			sb.WriteString(fmt.Sprintf("Kind: %s\n", node.Kind.String()))
+			sb.WriteString("(cached)\n\n")
+			sb.WriteString(entry.Response)
+			return textResult(sb.String()), nil, nil
+		}
+	}
+
+	// Generate prompt
+	messages := analyze.ExplainSymbolPrompt(source)
+
+	// Make request
+	reqCtx, reqCancel := context.WithTimeout(ctx, time.Duration(cfg.LLM.Timeout)*time.Second)
+	defer reqCancel()
+
+	resp, err := client.Complete(reqCtx, &analyze.CompletionRequest{
+		Messages:    messages,
+		Temperature: cfg.LLM.Temperature,
+		MaxTokens:   cfg.LLM.MaxTokens,
+	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("Error from LLM: %v", err)), nil, nil
+	}
+
+	// Cache response
+	if responseCache != nil && responseCache.Enabled() {
+		responseCache.SetResponse(source.ContentHash, operation, resp.Model, resp.Content, &cache.TokenUsage{
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		})
+	}
+
+	// Format output
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== %s ===\n", node.Name))
+	sb.WriteString(fmt.Sprintf("Path: %s:%d\n", node.Path, node.Line))
+	sb.WriteString(fmt.Sprintf("Kind: %s\n", node.Kind.String()))
+	sb.WriteString(fmt.Sprintf("Model: %s | Tokens: %d | Time: %v\n\n", resp.Model, resp.Usage.TotalTokens, resp.Duration.Round(time.Millisecond)))
+	sb.WriteString(resp.Content)
+
+	return textResult(sb.String()), nil, nil
+}
+
+func handleSummarizeModule(ctx context.Context, req *mcp.CallToolRequest, input SummarizeModuleInput) (*mcp.CallToolResult, any, error) {
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	// Default to project root if no module specified
+	modulePath := input.Module
+	if modulePath == "" {
+		modulePath = "."
+	}
+
+	// Resolve full path
+	fullPath := filepath.Join(absRoot, modulePath)
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Path not found: %s", modulePath)), nil, nil
+	}
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	if input.Model != "" {
+		cfg.LLM.Model = input.Model
+	}
+
+	// Create LLM client
+	client, err := analyze.NewClient(cfg)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Error creating LLM client: %v. Check your configuration.", err)), nil, nil
+	}
+
+	// Check connectivity
+	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	if err := client.Ping(pingCtx); err != nil {
+		return errorResult(fmt.Sprintf("Error connecting to LLM provider (%s): %v", client.Name(), err)), nil, nil
+	}
+
+	// Read source files
+	var sources []*analyze.SymbolSource
+
+	if info.IsDir() {
+		sources, err = analyze.ReadModuleSource(absRoot, modulePath)
+		if err != nil {
+			return errorResult(fmt.Sprintf("Error reading module: %v", err)), nil, nil
+		}
+	} else {
+		// Single file
+		source, err := analyze.ReadSymbolSource(absRoot, &graph.Node{
+			Kind: graph.KindFile,
+			Name: filepath.Base(modulePath),
+			Path: modulePath,
+		})
+		if err != nil {
+			return errorResult(fmt.Sprintf("Error reading file: %v", err)), nil, nil
+		}
+		sources = []*analyze.SymbolSource{source}
+	}
+
+	if len(sources) == 0 {
+		return errorResult("No source files found in the specified path"), nil, nil
+	}
+
+	// Compute combined content hash for caching
+	var hashes []string
+	for _, s := range sources {
+		hashes = append(hashes, s.ContentHash)
+	}
+	combinedHash := analyze.ContentHash(fmt.Sprintf("%v", hashes))
+
+	// Initialize cache
+	cacheOpts := cache.Options{
+		Dir:     filepath.Join(absRoot, ".codemap", "cache"),
+		Enabled: !input.NoCache && cfg.Cache.Enabled,
+	}
+	responseCache, _ := cache.New(cacheOpts)
+
+	// Check cache
+	operation := "summarize"
+	if responseCache != nil && responseCache.Enabled() {
+		if entry, ok := responseCache.GetByContentHash(combinedHash, operation, cfg.LLM.Model); ok {
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("=== %s ===\n", modulePath))
+			sb.WriteString(fmt.Sprintf("Files: %d\n", len(sources)))
+			sb.WriteString("(cached)\n\n")
+			sb.WriteString(entry.Response)
+			return textResult(sb.String()), nil, nil
+		}
+	}
+
+	// Generate prompt
+	messages := analyze.SummarizeModulePrompt(modulePath, sources)
+
+	// Make request
+	reqCtx, reqCancel := context.WithTimeout(ctx, time.Duration(cfg.LLM.Timeout)*time.Second)
+	defer reqCancel()
+
+	resp, err := client.Complete(reqCtx, &analyze.CompletionRequest{
+		Messages:    messages,
+		Temperature: cfg.LLM.Temperature,
+		MaxTokens:   cfg.LLM.MaxTokens,
+	})
+	if err != nil {
+		return errorResult(fmt.Sprintf("Error from LLM: %v", err)), nil, nil
+	}
+
+	// Cache response
+	if responseCache != nil && responseCache.Enabled() {
+		responseCache.SetResponse(combinedHash, operation, resp.Model, resp.Content, &cache.TokenUsage{
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			TotalTokens:      resp.Usage.TotalTokens,
+		})
+	}
+
+	// Collect file names
+	var fileNames []string
+	for _, s := range sources {
+		fileNames = append(fileNames, s.Node.Name)
+	}
+
+	// Format output
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== %s ===\n", modulePath))
+	sb.WriteString(fmt.Sprintf("Files: %s\n", strings.Join(fileNames, ", ")))
+	sb.WriteString(fmt.Sprintf("Model: %s | Tokens: %d | Time: %v\n\n", resp.Model, resp.Usage.TotalTokens, resp.Duration.Round(time.Millisecond)))
+	sb.WriteString(resp.Content)
+
+	return textResult(sb.String()), nil, nil
 }

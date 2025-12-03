@@ -1,0 +1,23 @@
+{
+  "description": "Expected graph for Python test corpus",
+  "nodes": {
+    "count": 19,
+    "files": ["main.py", "classes.py"],
+    "functions": [
+      "main", "hello", "add", "process", "helper", "nested", "variadic_func",
+      "__init__", "greet", "add_user", "process_all", "_private_method", "create_user"
+    ],
+    "types": ["User", "Service"]
+  },
+  "edges": {
+    "count": 23,
+    "calls": [
+      {"from": "main", "to": "hello"},
+      {"from": "main", "to": "add"},
+      {"from": "main", "to": "process"},
+      {"from": "process", "to": "helper"},
+      {"from": "helper", "to": "nested"}
+    ]
+  },
+  "notes": "Cross-file method calls are not yet captured"
+}

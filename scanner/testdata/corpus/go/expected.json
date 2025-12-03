@@ -1,0 +1,24 @@
+{
+  "description": "Expected graph for Go test corpus",
+  "nodes": {
+    "count": 15,
+    "files": ["main.go", "types.go"],
+    "functions": [
+      "main", "hello", "add", "process", "helper", "nested",
+      "NewUser", "Greet", "AddUser", "ProcessAll"
+    ],
+    "types": ["User", "Service"],
+    "imports": ["fmt"]
+  },
+  "edges": {
+    "count": 19,
+    "calls": [
+      {"from": "main", "to": "hello"},
+      {"from": "main", "to": "add"},
+      {"from": "main", "to": "process"},
+      {"from": "process", "to": "helper"},
+      {"from": "helper", "to": "nested"}
+    ]
+  },
+  "notes": "Cross-file method calls (Greet->hello) are not yet captured"
+}

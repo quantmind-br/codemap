@@ -9,3 +9,6 @@ scanner/grammars/
 codemap
 codemap-mcp
 scanner/codemap-scanner
+
+# Knowledge graph index
+.codemap/

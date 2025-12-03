@@ -270,6 +270,7 @@ func (fc *funcCapture) Build(detail DetailLevel, lang string) FuncInfo {
 		Name:       fc.name,
 		IsExported: IsExportedName(fc.name, lang),
 		Line:       fc.line,
+		ParamCount: countParams(fc.params),
 	}
 
 	if detail >= DetailSignature && fc.params != "" {
@@ -281,6 +282,48 @@ func (fc *funcCapture) Build(detail DetailLevel, lang string) FuncInfo {
 	}
 
 	return info
+}
+
+// countParams counts the number of parameters from a parameter list string.
+// Returns -1 for variadic functions or empty params, 0 for no params.
+func countParams(params string) int {
+	params = strings.TrimSpace(params)
+	if params == "" || params == "()" {
+		return 0
+	}
+
+	// Remove outer parentheses if present
+	if strings.HasPrefix(params, "(") && strings.HasSuffix(params, ")") {
+		params = params[1 : len(params)-1]
+	}
+	params = strings.TrimSpace(params)
+	if params == "" {
+		return 0
+	}
+
+	// Check for variadic indicators
+	if strings.Contains(params, "...") || strings.Contains(params, "*args") || strings.Contains(params, "**kwargs") {
+		return -1 // Variadic
+	}
+
+	// Count parameters by tracking parentheses/brackets depth
+	// to avoid counting commas inside nested types like func(int, int)
+	count := 1
+	depth := 0
+	for _, ch := range params {
+		switch ch {
+		case '(', '[', '{', '<':
+			depth++
+		case ')', ']', '}', '>':
+			depth--
+		case ',':
+			if depth == 0 {
+				count++
+			}
+		}
+	}
+
+	return count
 }
 
 // handleFuncCapture routes function-related captures to builder

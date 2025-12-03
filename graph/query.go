@@ -261,13 +261,13 @@ func (g *CodeGraph) GetReverseTree(startID NodeID, maxDepth int) map[int][]*Node
 
 // Stats returns statistics about the graph.
 type Stats struct {
-	TotalNodes     int            `json:"total_nodes"`
-	TotalEdges     int            `json:"total_edges"`
-	NodesByKind    map[string]int `json:"nodes_by_kind"`
-	EdgesByKind    map[string]int `json:"edges_by_kind"`
-	FileCount      int            `json:"file_count"`
-	FunctionCount  int            `json:"function_count"`
-	AvgEdgesPerNode float64       `json:"avg_edges_per_node"`
+	TotalNodes      int            `json:"total_nodes"`
+	TotalEdges      int            `json:"total_edges"`
+	NodesByKind     map[string]int `json:"nodes_by_kind"`
+	EdgesByKind     map[string]int `json:"edges_by_kind"`
+	FileCount       int            `json:"file_count"`
+	FunctionCount   int            `json:"function_count"`
+	AvgEdgesPerNode float64        `json:"avg_edges_per_node"`
 }
 
 // GetStats computes statistics about the graph.

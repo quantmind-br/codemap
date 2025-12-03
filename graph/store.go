@@ -122,6 +122,7 @@ func IsStale(g *CodeGraph, rootPath string) (bool, error) {
 }
 
 // GetModifiedFiles returns a list of files that have been modified since the graph was indexed.
+// Only considers paths that look like actual source files (contain a file extension).
 func GetModifiedFiles(g *CodeGraph, rootPath string) ([]string, error) {
 	if g == nil || g.LastIndexed == 0 {
 		return nil, nil
@@ -131,6 +132,11 @@ func GetModifiedFiles(g *CodeGraph, rootPath string) ([]string, error) {
 	var modified []string
 
 	for path := range g.nodesByPath {
+		// Skip package paths (no extension) - only check actual file paths
+		ext := filepath.Ext(path)
+		if ext == "" {
+			continue
+		}
 		fullPath := filepath.Join(rootPath, path)
 		info, err := os.Stat(fullPath)
 		if err != nil {
@@ -145,6 +151,35 @@ func GetModifiedFiles(g *CodeGraph, rootPath string) ([]string, error) {
 	}
 
 	return modified, nil
+}
+
+// GetDeletedFiles returns files that were in the graph but no longer exist.
+// Only considers paths that look like actual source files (contain a file extension).
+func GetDeletedFiles(g *CodeGraph, rootPath string) []string {
+	if g == nil {
+		return nil
+	}
+
+	var deleted []string
+	for path := range g.nodesByPath {
+		// Skip package paths (no extension) - only check actual file paths
+		ext := filepath.Ext(path)
+		if ext == "" {
+			continue
+		}
+		fullPath := filepath.Join(rootPath, path)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			deleted = append(deleted, path)
+		}
+	}
+
+	return deleted
+}
+
+// IsFileInGraph checks if a file path is already in the graph.
+func (g *CodeGraph) IsFileInGraph(path string) bool {
+	_, exists := g.nodesByPath[path]
+	return exists
 }
 
 func init() {

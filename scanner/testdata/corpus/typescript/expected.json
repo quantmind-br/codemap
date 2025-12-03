@@ -1,0 +1,24 @@
+{
+  "description": "Expected graph for TypeScript test corpus",
+  "nodes": {
+    "count": 18,
+    "files": ["main.ts", "types.ts"],
+    "functions": [
+      "main", "hello", "add", "process", "helper", "nested", "variadicFunc",
+      "constructor", "greet", "addUser", "processAll", "createUser"
+    ],
+    "types": ["User", "Service"],
+    "interfaces": ["IUser"]
+  },
+  "edges": {
+    "count": 22,
+    "calls": [
+      {"from": "main", "to": "hello"},
+      {"from": "main", "to": "add"},
+      {"from": "main", "to": "process"},
+      {"from": "process", "to": "helper"},
+      {"from": "helper", "to": "nested"}
+    ]
+  },
+  "notes": "Cross-file calls and class instantiation are not yet captured"
+}

@@ -50,10 +50,11 @@ type Project struct {
 // FuncInfo represents a function/method with optional detail
 type FuncInfo struct {
 	Name       string `json:"name"`
-	Signature  string `json:"signature,omitempty"` // Full signature when detail >= 1
-	Receiver   string `json:"receiver,omitempty"`  // For methods (Go, Rust, etc.)
-	IsExported bool   `json:"exported,omitempty"`  // Public visibility
-	Line       int    `json:"line,omitempty"`      // Line number of definition (1-indexed)
+	Signature  string `json:"signature,omitempty"`   // Full signature when detail >= 1
+	Receiver   string `json:"receiver,omitempty"`    // For methods (Go, Rust, etc.)
+	IsExported bool   `json:"exported,omitempty"`    // Public visibility
+	Line       int    `json:"line,omitempty"`        // Line number of definition (1-indexed)
+	ParamCount int    `json:"param_count,omitempty"` // Number of parameters (-1 for variadic)
 }
 
 // MarshalJSON customizes JSON output for backward compatibility
