@@ -1021,3 +1021,289 @@ func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMo
 		fmt.Println(resp.Content)
 	}
 }
+
+// runEmbedMode handles the --embed command for generating embeddings.
+func runEmbedMode(absRoot, modelOverride string, forceRebuild, jsonMode bool) {
+	// Load graph
+	graphPath := graph.GraphPath(absRoot)
+	if !graph.Exists(graphPath) {
+		fmt.Fprintln(os.Stderr, "No index found. Run 'codemap --index' first.")
+		os.Exit(1)
+	}
+
+	codeGraph, err := graph.LoadBinary(graphPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading index: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Load or create vector index
+	vectorPath := graph.VectorIndexPath(absRoot)
+	var vectorIndex *graph.InMemoryVectorIndex
+
+	if !forceRebuild && graph.VectorIndexExists(absRoot) {
+		vectorIndex, err = graph.LoadVectorIndex(vectorPath)
+		if err != nil {
+			if !jsonMode {
+				fmt.Fprintf(os.Stderr, "Warning: could not load existing vectors, rebuilding: %v\n", err)
+			}
+			vectorIndex = graph.NewVectorIndex(0)
+		} else if !jsonMode {
+			fmt.Fprintf(os.Stderr, "Loaded existing vectors: %d\n", vectorIndex.Count())
+		}
+	} else {
+		vectorIndex = graph.NewVectorIndex(0)
+	}
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	if modelOverride != "" {
+		cfg.LLM.EmbeddingModel = modelOverride
+	}
+
+	// Create LLM client
+	client, err := analyze.NewClient(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating LLM client: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Check your configuration (~/.config/codemap/config.yaml)")
+		os.Exit(1)
+	}
+
+	// Ping to verify connectivity
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := client.Ping(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error connecting to LLM provider (%s): %v\n", client.Name(), err)
+		os.Exit(1)
+	}
+
+	// Configure embedding
+	embedConfig := analyze.DefaultEmbeddingConfig()
+	embedConfig.SkipExisting = !forceRebuild
+	embedConfig.ProgressFn = func(completed, total int) {
+		if !jsonMode {
+			fmt.Fprintf(os.Stderr, "\rEmbedding: %d/%d", completed, total)
+		}
+	}
+
+	// Run embedding
+	if !jsonMode {
+		fmt.Fprintf(os.Stderr, "Generating embeddings using %s...\n", cfg.LLM.EmbeddingModel)
+	}
+
+	embedCtx, embedCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer embedCancel()
+
+	stats, err := analyze.EmbedGraph(embedCtx, client, codeGraph, vectorIndex, embedConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nError during embedding: %v\n", err)
+	}
+
+	// Save vectors
+	if err := vectorIndex.Save(vectorPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving vectors: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !jsonMode {
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+
+	if jsonMode {
+		json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
+			"status":    "completed",
+			"path":      vectorPath,
+			"total":     stats.Total,
+			"embedded":  stats.Embedded,
+			"skipped":   stats.Skipped,
+			"failed":    stats.Failed,
+			"dimension": vectorIndex.Dimension(),
+			"vectors":   vectorIndex.Count(),
+			"duration":  stats.Duration.String(),
+			"tokens_in": stats.TokensIn,
+		})
+	} else {
+		fmt.Printf("\n✓ Embeddings generated in %v\n", stats.Duration.Round(time.Millisecond))
+		fmt.Printf("  Path: %s\n", vectorPath)
+		fmt.Printf("  Vectors: %d (dimension: %d)\n", vectorIndex.Count(), vectorIndex.Dimension())
+		fmt.Printf("  Embedded: %d, Skipped: %d, Failed: %d\n", stats.Embedded, stats.Skipped, stats.Failed)
+		if stats.TokensIn > 0 {
+			fmt.Printf("  Tokens used: %d\n", stats.TokensIn)
+		}
+	}
+}
+
+// runSearchMode handles the --search command for semantic/hybrid search.
+func runSearchMode(absRoot, query string, limit int, expandContext bool, modelOverride string, jsonMode bool) {
+	if query == "" {
+		fmt.Fprintln(os.Stderr, "Error: --q is required with --search")
+		fmt.Fprintln(os.Stderr, "Usage: codemap --search --q \"your query\" [path]")
+		os.Exit(1)
+	}
+
+	// Load graph
+	graphPath := graph.GraphPath(absRoot)
+	if !graph.Exists(graphPath) {
+		fmt.Fprintln(os.Stderr, "No index found. Run 'codemap --index' first.")
+		os.Exit(1)
+	}
+
+	codeGraph, err := graph.LoadBinary(graphPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading index: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Load vector index if available
+	var vectorIndex *graph.InMemoryVectorIndex
+	vectorPath := graph.VectorIndexPath(absRoot)
+	if graph.VectorIndexExists(absRoot) {
+		vectorIndex, err = graph.LoadVectorIndex(vectorPath)
+		if err != nil && !jsonMode {
+			fmt.Fprintf(os.Stderr, "Warning: could not load vectors, falling back to graph search: %v\n", err)
+		}
+	}
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	if modelOverride != "" {
+		cfg.LLM.EmbeddingModel = modelOverride
+	}
+
+	// Create LLM client (needed for query embedding)
+	var client analyze.LLMClient
+	if vectorIndex != nil && vectorIndex.Count() > 0 {
+		client, err = analyze.NewClient(cfg)
+		if err != nil && !jsonMode {
+			fmt.Fprintf(os.Stderr, "Warning: LLM client unavailable, falling back to graph search: %v\n", err)
+		}
+	}
+
+	// Create retriever
+	retriever := analyze.NewRetriever(codeGraph, vectorIndex, client, absRoot)
+
+	// Configure search
+	searchConfig := analyze.DefaultSearchConfig()
+	searchConfig.Limit = limit
+	searchConfig.ExpandContext = expandContext
+
+	// Determine search mode based on available resources
+	if client == nil || vectorIndex == nil || vectorIndex.Count() == 0 {
+		searchConfig.Mode = analyze.SearchModeGraph
+		if !jsonMode {
+			fmt.Fprintf(os.Stderr, "Using graph search (run 'codemap --embed' for semantic search)\n")
+		}
+	}
+
+	// Perform search
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	results, err := retriever.Search(ctx, query, searchConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error during search: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(results) == 0 {
+		if jsonMode {
+			json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
+				"query":   query,
+				"results": []interface{}{},
+				"count":   0,
+			})
+		} else {
+			fmt.Printf("No results found for: %s\n", query)
+		}
+		return
+	}
+
+	// Output results
+	if jsonMode {
+		type jsonResult struct {
+			Name        string   `json:"name"`
+			Kind        string   `json:"kind"`
+			Path        string   `json:"path"`
+			Line        int      `json:"line"`
+			Score       float64  `json:"score"`
+			VectorScore float64  `json:"vector_score,omitempty"`
+			GraphScore  float64  `json:"graph_score,omitempty"`
+			MatchReason string   `json:"match_reason"`
+			Snippet     string   `json:"snippet,omitempty"`
+			Callers     []string `json:"callers,omitempty"`
+			Callees     []string `json:"callees,omitempty"`
+		}
+
+		var jsonResults []jsonResult
+		for _, r := range results {
+			jr := jsonResult{
+				Name:        r.Node.Name,
+				Kind:        r.Node.Kind.String(),
+				Path:        r.Node.Path,
+				Line:        r.Node.Line,
+				Score:       r.FinalScore,
+				VectorScore: r.VectorScore,
+				GraphScore:  r.GraphScore,
+				MatchReason: r.MatchReason,
+				Snippet:     r.Snippet,
+			}
+			for _, c := range r.Callers {
+				jr.Callers = append(jr.Callers, c.Name)
+			}
+			for _, c := range r.Callees {
+				jr.Callees = append(jr.Callees, c.Name)
+			}
+			jsonResults = append(jsonResults, jr)
+		}
+
+		json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
+			"query":   query,
+			"results": jsonResults,
+			"count":   len(jsonResults),
+		})
+	} else {
+		fmt.Printf("Search: \"%s\"\n", query)
+		fmt.Printf("Found %d results:\n\n", len(results))
+
+		for i, r := range results {
+			fmt.Printf("%d. %s [%s] %.3f\n", i+1, r.Node.Name, r.Node.Kind, r.FinalScore)
+			fmt.Printf("   %s:%d\n", r.Node.Path, r.Node.Line)
+			if r.MatchReason != "" {
+				fmt.Printf("   Matched: %s\n", r.MatchReason)
+			}
+			if len(r.Callers) > 0 {
+				fmt.Printf("   Callers: ")
+				for j, c := range r.Callers {
+					if j > 0 {
+						fmt.Print(", ")
+					}
+					fmt.Print(c.Name)
+				}
+				fmt.Println()
+			}
+			if len(r.Callees) > 0 {
+				fmt.Printf("   Callees: ")
+				for j, c := range r.Callees {
+					if j > 0 {
+						fmt.Print(", ")
+					}
+					fmt.Print(c.Name)
+				}
+				fmt.Println()
+			}
+			if r.Snippet != "" {
+				fmt.Printf("   ```\n%s\n   ```\n", r.Snippet)
+			}
+			fmt.Println()
+		}
+	}
+}
