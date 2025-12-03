@@ -1114,3 +1114,107 @@ func handleSummarizeModule(ctx context.Context, req *mcp.CallToolRequest, input 
 
 	return textResult(sb.String()), nil, nil
 }
+
+func handleSemanticSearch(ctx context.Context, req *mcp.CallToolRequest, input SemanticSearchInput) (*mcp.CallToolResult, any, error) {
+	absPath, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	if input.Query == "" {
+		return errorResult("query is required"), nil, nil
+	}
+
+	// Load graph
+	codeGraph, err := loadGraph(absPath)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	// Load vector index if available
+	var vectorIndex *graph.InMemoryVectorIndex
+	vectorPath := graph.VectorIndexPath(absPath)
+	if graph.VectorIndexExists(absPath) {
+		vectorIndex, err = graph.LoadVectorIndex(vectorPath)
+		if err != nil {
+			// Log but continue - will fall back to graph search
+			vectorIndex = nil
+		}
+	}
+
+	// Load configuration
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = config.DefaultConfig()
+	}
+
+	// Create LLM client (needed for query embedding)
+	var client analyze.LLMClient
+	if vectorIndex != nil && vectorIndex.Count() > 0 {
+		client, _ = analyze.NewClient(cfg)
+	}
+
+	// Create retriever
+	retriever := analyze.NewRetriever(codeGraph, vectorIndex, client, absPath)
+
+	// Configure search
+	searchConfig := analyze.DefaultSearchConfig()
+	if input.Limit > 0 {
+		searchConfig.Limit = input.Limit
+	}
+	searchConfig.ExpandContext = input.Expand
+
+	// Determine search mode
+	if client == nil || vectorIndex == nil || vectorIndex.Count() == 0 {
+		searchConfig.Mode = analyze.SearchModeGraph
+	}
+
+	// Perform search
+	results, err := retriever.Search(ctx, input.Query, searchConfig)
+	if err != nil {
+		return errorResult(fmt.Sprintf("Search error: %v", err)), nil, nil
+	}
+
+	if len(results) == 0 {
+		return textResult(fmt.Sprintf("No results found for: %s", input.Query)), nil, nil
+	}
+
+	// Format output
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Search: \"%s\"\n", input.Query))
+	sb.WriteString(fmt.Sprintf("Results: %d\n\n", len(results)))
+
+	for i, r := range results {
+		sb.WriteString(fmt.Sprintf("%d. %s [%s] (score: %.3f)\n", i+1, r.Node.Name, r.Node.Kind, r.FinalScore))
+		sb.WriteString(fmt.Sprintf("   %s:%d\n", r.Node.Path, r.Node.Line))
+		if r.MatchReason != "" {
+			sb.WriteString(fmt.Sprintf("   Match: %s\n", r.MatchReason))
+		}
+		if len(r.Callers) > 0 {
+			sb.WriteString("   Callers: ")
+			for j, c := range r.Callers {
+				if j > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(c.Name)
+			}
+			sb.WriteString("\n")
+		}
+		if len(r.Callees) > 0 {
+			sb.WriteString("   Callees: ")
+			for j, c := range r.Callees {
+				if j > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteString(c.Name)
+			}
+			sb.WriteString("\n")
+		}
+		if r.Snippet != "" {
+			sb.WriteString(fmt.Sprintf("   ```\n%s\n   ```\n", r.Snippet))
+		}
+		sb.WriteString("\n")
+	}
+
+	return textResult(sb.String()), nil, nil
+}
