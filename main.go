@@ -22,6 +22,11 @@ func main() {
 	jsonMode := flag.Bool("json", false, "Output JSON (for Python renderer compatibility)")
 	debugMode := flag.Bool("debug", false, "Show debug info (gitignore loading, paths, etc.)")
 	helpMode := flag.Bool("help", false, "Show help")
+
+	// New flags for enhanced analysis
+	detailLevel := flag.Int("detail", 0, "Detail level: 0=names, 1=signatures, 2=full (use with --deps)")
+	apiMode := flag.Bool("api", false, "Show public API surface only (compact view, use with --deps)")
+
 	flag.Parse()
 
 	if *helpMode {
@@ -29,21 +34,38 @@ func main() {
 		fmt.Println()
 		fmt.Println("Usage: codemap [options] [path]")
 		fmt.Println()
+		fmt.Println("Modes:")
+		fmt.Println("  (default)          Tree view with token estimates and file sizes")
+		fmt.Println("  --deps             Dependency flow map (functions, types & imports)")
+		fmt.Println("  --skyline          City skyline visualization")
+		fmt.Println("  --diff             Only show files changed vs a branch")
+		fmt.Println()
 		fmt.Println("Options:")
-		fmt.Println("  --help         Show this help message")
-		fmt.Println("  --skyline      City skyline visualization")
-		fmt.Println("  --animate      Animated skyline (use with --skyline)")
-		fmt.Println("  --deps         Dependency flow map (functions & imports)")
-		fmt.Println("  --diff         Only show files changed vs main")
-		fmt.Println("  --ref <branch> Branch to compare against (default: main)")
+		fmt.Println("  --help             Show this help message")
+		fmt.Println("  --json             Output JSON (for programmatic use)")
+		fmt.Println()
+		fmt.Println("Dependency mode (--deps):")
+		fmt.Println("  --detail <level>   Detail level: 0=names, 1=signatures, 2=full")
+		fmt.Println("  --api              Show public API surface only (compact view)")
+		fmt.Println()
+		fmt.Println("Diff mode (--diff):")
+		fmt.Println("  --ref <branch>     Branch to compare against (default: main)")
+		fmt.Println()
+		fmt.Println("Skyline mode (--skyline):")
+		fmt.Println("  --animate          Enable terminal animation")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  codemap .                    # Basic tree view")
-		fmt.Println("  codemap --skyline .          # Skyline visualization")
-		fmt.Println("  codemap --skyline --animate  # Animated skyline")
-		fmt.Println("  codemap --deps /path/to/proj # Dependency flow map")
-		fmt.Println("  codemap --diff               # Files changed vs main")
-		fmt.Println("  codemap --diff --ref develop # Files changed vs develop")
+		fmt.Println("  codemap .                        # Tree with tokens (~3.5 chars/token)")
+		fmt.Println("  codemap --deps .                 # Dependencies with line numbers")
+		fmt.Println("  codemap --deps --detail 1 .      # With function signatures")
+		fmt.Println("  codemap --deps --api .           # Public API surface only")
+		fmt.Println("  codemap --diff                   # Changed files vs main")
+		fmt.Println("  codemap --diff --ref develop     # Changed files vs develop")
+		fmt.Println("  codemap --skyline --animate .    # Animated skyline")
+		fmt.Println()
+		fmt.Println("Output notes:")
+		fmt.Println("  ⭐️  = Top 5 largest source files")
+		fmt.Println("  [!] = Large file (>8k tokens) - may need chunking for LLMs")
 		os.Exit(0)
 	}
 
@@ -94,7 +116,7 @@ func main() {
 		if diffInfo != nil {
 			changedFiles = diffInfo.Changed
 		}
-		runDepsMode(absRoot, root, gitignore, *jsonMode, *diffRef, changedFiles)
+		runDepsMode(absRoot, root, gitignore, *jsonMode, *diffRef, changedFiles, *detailLevel, *apiMode)
 		return
 	}
 
@@ -138,7 +160,7 @@ func main() {
 	}
 }
 
-func runDepsMode(absRoot, root string, gitignore *ignore.GitIgnore, jsonMode bool, diffRef string, changedFiles map[string]bool) {
+func runDepsMode(absRoot, root string, gitignore *ignore.GitIgnore, jsonMode bool, diffRef string, changedFiles map[string]bool, detailLevel int, apiMode bool) {
 	loader := scanner.NewGrammarLoader()
 
 	// Check if grammars are available
@@ -156,7 +178,7 @@ func runDepsMode(absRoot, root string, gitignore *ignore.GitIgnore, jsonMode boo
 		os.Exit(1)
 	}
 
-	analyses, err := scanner.ScanForDeps(root, gitignore, loader)
+	analyses, err := scanner.ScanForDeps(root, gitignore, loader, scanner.DetailLevel(detailLevel))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error scanning for deps: %v\n", err)
 		os.Exit(1)
@@ -173,11 +195,14 @@ func runDepsMode(absRoot, root string, gitignore *ignore.GitIgnore, jsonMode boo
 		Files:        analyses,
 		ExternalDeps: scanner.ReadExternalDeps(absRoot),
 		DiffRef:      diffRef,
+		DetailLevel:  detailLevel,
 	}
 
 	// Render or output JSON
 	if jsonMode {
 		json.NewEncoder(os.Stdout).Encode(depsProject)
+	} else if apiMode {
+		render.APIView(depsProject)
 	} else {
 		render.Depgraph(depsProject)
 	}

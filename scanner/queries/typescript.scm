@@ -1,21 +1,36 @@
-; TypeScript/TSX query for functions and imports
+; TypeScript/TSX query for functions, types, and imports
 
-; Function declarations
+; Function declarations with parameters
 (function_declaration
-  name: (identifier) @function)
+  name: (identifier) @func.name
+  parameters: (formal_parameters) @func.params)
 
 ; Arrow functions assigned to variables
 (variable_declarator
-  name: (identifier) @function
-  value: (arrow_function))
+  name: (identifier) @func.name
+  value: (arrow_function
+    parameters: (formal_parameters) @func.params))
 
 ; Method definitions
 (method_definition
-  name: (property_identifier) @function)
+  name: (property_identifier) @func.name
+  parameters: (formal_parameters) @func.params)
 
-; Method signatures in interfaces
-(method_signature
-  name: (property_identifier) @function)
+; Interface declarations
+(interface_declaration
+  name: (type_identifier) @type.name) @type.interface
+
+; Class declarations
+(class_declaration
+  name: (type_identifier) @type.name) @type.class
+
+; Type aliases
+(type_alias_declaration
+  name: (type_identifier) @type.name) @type.alias
+
+; Enum declarations
+(enum_declaration
+  name: (identifier) @type.name) @type.enum
 
 ; ES6 imports
 (import_statement

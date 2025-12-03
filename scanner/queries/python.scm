@@ -1,10 +1,13 @@
-; Python query for extracting functions and imports
+; Python query for extracting functions, classes, and imports
 
-; Function definitions
+; Function definitions with parameters
 (function_definition
-  name: (identifier) @function)
+  name: (identifier) @func.name
+  parameters: (parameters) @func.params)
 
-; Class method definitions (also caught by function_definition)
+; Class definitions
+(class_definition
+  name: (identifier) @type.name) @type.class
 
 ; import x, import x.y.z
 (import_statement

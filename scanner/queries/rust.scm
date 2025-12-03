@@ -1,12 +1,21 @@
-; Rust query for functions and imports
+; Rust query for functions, types, and imports
 
-; Function definitions
+; Function definitions with parameters
 (function_item
-  name: (identifier) @function)
+  name: (identifier) @func.name
+  parameters: (parameters) @func.params)
 
-; Method definitions in impl blocks
-(function_item
-  name: (identifier) @method)
+; Struct definitions
+(struct_item
+  name: (type_identifier) @type.name) @type.struct
+
+; Enum definitions
+(enum_item
+  name: (type_identifier) @type.name) @type.enum
+
+; Trait definitions
+(trait_item
+  name: (type_identifier) @type.name) @type.trait
 
 ; use statements
 (use_declaration

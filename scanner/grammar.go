@@ -180,7 +180,8 @@ func DetectLanguage(filePath string) string {
 }
 
 // AnalyzeFile extracts functions and imports
-func (l *GrammarLoader) AnalyzeFile(filePath string) (*FileAnalysis, error) {
+// detailLevel controls depth of extraction (0=names, 1=signatures, 2=full)
+func (l *GrammarLoader) AnalyzeFile(filePath string, detailLevel DetailLevel) (*FileAnalysis, error) {
 	lang := DetectLanguage(filePath)
 	if lang == "" {
 		return nil, nil
@@ -208,25 +209,266 @@ func (l *GrammarLoader) AnalyzeFile(filePath string) (*FileAnalysis, error) {
 
 	analysis := &FileAnalysis{Path: filePath, Language: lang}
 
+	// Temporary storage for building composite captures
+	funcBuilder := make(map[uint]*funcCapture)
+	typeBuilder := make(map[uint]*typeCapture)
+
 	// Use Matches() API - iterate over query matches
 	matches := cursor.Matches(config.Query, tree.RootNode(), content)
 	for match := matches.Next(); match != nil; match = matches.Next() {
 		for _, capture := range match.Captures {
-			name := config.Query.CaptureNames()[capture.Index]
+			captureName := config.Query.CaptureNames()[capture.Index]
 			text := strings.Trim(capture.Node.Utf8Text(content), `"'`)
+			// Extract line number (1-indexed)
+			line := int(capture.Node.StartPosition().Row) + 1
 
-			switch name {
-			case "function", "method":
-				analysis.Functions = append(analysis.Functions, text)
-			case "import", "module":
+			// Route to appropriate handler based on capture name prefix
+			switch {
+			case strings.HasPrefix(captureName, "func."):
+				handleFuncCapture(funcBuilder, match.Id(), captureName, text, line)
+			case strings.HasPrefix(captureName, "type."):
+				handleTypeCapture(typeBuilder, match.Id(), captureName, text, line, detailLevel)
+			case captureName == "import" || captureName == "module":
 				analysis.Imports = append(analysis.Imports, text)
+			// Legacy support: plain @function/@method capture (current queries)
+			case captureName == "function" || captureName == "method":
+				analysis.Functions = append(analysis.Functions, FuncInfo{Name: text, Line: line})
 			}
 		}
 	}
 
-	analysis.Functions = dedupe(analysis.Functions)
+	// Build final function list from captured components
+	for _, fc := range funcBuilder {
+		funcInfo := fc.Build(detailLevel, lang)
+		analysis.Functions = append(analysis.Functions, funcInfo)
+	}
+
+	// Build final type list
+	for _, tc := range typeBuilder {
+		typeInfo := tc.Build(detailLevel, lang)
+		analysis.Types = append(analysis.Types, typeInfo)
+	}
+
+	analysis.Functions = dedupeFuncs(analysis.Functions)
+	analysis.Types = dedupeTypes(analysis.Types)
 	analysis.Imports = dedupe(analysis.Imports)
 	return analysis, nil
+}
+
+// funcCapture collects components of a function signature
+type funcCapture struct {
+	name     string
+	params   string
+	result   string
+	receiver string
+	line     int
+}
+
+// Build constructs FuncInfo from captured components
+func (fc *funcCapture) Build(detail DetailLevel, lang string) FuncInfo {
+	info := FuncInfo{
+		Name:       fc.name,
+		IsExported: IsExportedName(fc.name, lang),
+		Line:       fc.line,
+	}
+
+	if detail >= DetailSignature && fc.params != "" {
+		info.Signature = buildSignature(fc, lang)
+	}
+
+	if fc.receiver != "" {
+		info.Receiver = fc.receiver
+	}
+
+	return info
+}
+
+// handleFuncCapture routes function-related captures to builder
+func handleFuncCapture(builders map[uint]*funcCapture, matchID uint, name, text string, line int) {
+	if builders[matchID] == nil {
+		builders[matchID] = &funcCapture{}
+	}
+	fc := builders[matchID]
+
+	switch name {
+	case "func.name":
+		fc.name = text
+		fc.line = line // Capture line on name (primary identifier)
+	case "func.params":
+		fc.params = text
+	case "func.result":
+		fc.result = text
+	case "func.receiver":
+		fc.receiver = text
+	}
+}
+
+// typeCapture collects components of a type definition
+type typeCapture struct {
+	name   string
+	kind   TypeKind
+	fields string
+	line   int
+}
+
+// Build constructs TypeInfo from captured components
+func (tc *typeCapture) Build(detail DetailLevel, lang string) TypeInfo {
+	info := TypeInfo{
+		Name:       tc.name,
+		Kind:       tc.kind,
+		IsExported: IsExportedName(tc.name, lang),
+		Line:       tc.line,
+	}
+
+	if detail >= DetailFull && tc.fields != "" {
+		info.Fields = parseFieldNames(tc.fields)
+	}
+
+	return info
+}
+
+// handleTypeCapture routes type-related captures to builder
+func handleTypeCapture(builders map[uint]*typeCapture, matchID uint, name, text string, line int, detail DetailLevel) {
+	if builders[matchID] == nil {
+		builders[matchID] = &typeCapture{}
+	}
+	tc := builders[matchID]
+
+	switch name {
+	case "type.name":
+		tc.name = text
+		tc.line = line // Capture line on name (primary identifier)
+	case "type.fields", "type.methods":
+		if detail >= DetailFull {
+			tc.fields = text
+		}
+	case "type.struct":
+		tc.kind = KindStruct
+	case "type.class":
+		tc.kind = KindClass
+	case "type.interface":
+		tc.kind = KindInterface
+	case "type.trait":
+		tc.kind = KindTrait
+	case "type.enum":
+		tc.kind = KindEnum
+	case "type.alias":
+		tc.kind = KindTypeAlias
+	case "type.protocol":
+		tc.kind = KindProtocol
+	}
+}
+
+// buildSignature reconstructs function signature from components
+func buildSignature(fc *funcCapture, lang string) string {
+	var sig strings.Builder
+
+	switch lang {
+	case "go":
+		sig.WriteString("func ")
+		if fc.receiver != "" {
+			sig.WriteString(fc.receiver)
+			sig.WriteString(" ")
+		}
+		sig.WriteString(fc.name)
+		sig.WriteString(fc.params)
+		if fc.result != "" {
+			sig.WriteString(" ")
+			sig.WriteString(fc.result)
+		}
+
+	case "python":
+		sig.WriteString("def ")
+		sig.WriteString(fc.name)
+		sig.WriteString(fc.params)
+		if fc.result != "" {
+			sig.WriteString(" -> ")
+			sig.WriteString(fc.result)
+		}
+
+	case "typescript", "javascript":
+		sig.WriteString("function ")
+		sig.WriteString(fc.name)
+		sig.WriteString(fc.params)
+		if fc.result != "" {
+			sig.WriteString(": ")
+			sig.WriteString(fc.result)
+		}
+
+	case "rust":
+		sig.WriteString("fn ")
+		sig.WriteString(fc.name)
+		sig.WriteString(fc.params)
+		if fc.result != "" {
+			sig.WriteString(" -> ")
+			sig.WriteString(fc.result)
+		}
+
+	case "java", "c_sharp":
+		if fc.result != "" {
+			sig.WriteString(fc.result)
+			sig.WriteString(" ")
+		}
+		sig.WriteString(fc.name)
+		sig.WriteString(fc.params)
+
+	default:
+		sig.WriteString(fc.name)
+		sig.WriteString(fc.params)
+	}
+
+	return sig.String()
+}
+
+// parseFieldNames extracts field/member names from raw block text
+func parseFieldNames(fieldsText string) []string {
+	var fields []string
+	lines := strings.Split(fieldsText, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "{" || line == "}" {
+			continue
+		}
+
+		// Extract first identifier (field name)
+		parts := strings.Fields(line)
+		if len(parts) > 0 {
+			name := strings.TrimSuffix(parts[0], ":")
+			name = strings.TrimSuffix(name, ",")
+			if name != "" && !strings.HasPrefix(name, "//") && !strings.HasPrefix(name, "#") {
+				fields = append(fields, name)
+			}
+		}
+	}
+
+	return fields
+}
+
+// dedupeFuncs removes duplicate functions by name
+func dedupeFuncs(funcs []FuncInfo) []FuncInfo {
+	seen := make(map[string]bool)
+	var out []FuncInfo
+	for _, f := range funcs {
+		if !seen[f.Name] {
+			seen[f.Name] = true
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// dedupeTypes removes duplicate types by name
+func dedupeTypes(types []TypeInfo) []TypeInfo {
+	seen := make(map[string]bool)
+	var out []TypeInfo
+	for _, t := range types {
+		if !seen[t.Name] {
+			seen[t.Name] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func getExecutableDir() string {

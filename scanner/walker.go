@@ -90,9 +90,10 @@ func ScanFiles(root string, gitignore *ignore.GitIgnore) ([]FileInfo, error) {
 		}
 
 		files = append(files, FileInfo{
-			Path: relPath,
-			Size: info.Size(),
-			Ext:  filepath.Ext(path),
+			Path:   relPath,
+			Size:   info.Size(),
+			Ext:    filepath.Ext(path),
+			Tokens: EstimateTokens(info.Size()),
 		})
 
 		return nil
@@ -102,7 +103,8 @@ func ScanFiles(root string, gitignore *ignore.GitIgnore) ([]FileInfo, error) {
 }
 
 // ScanForDeps walks the directory tree and analyzes files for dependencies
-func ScanForDeps(root string, gitignore *ignore.GitIgnore, loader *GrammarLoader) ([]FileAnalysis, error) {
+// detailLevel controls the depth of extraction (0=names, 1=signatures, 2=full)
+func ScanForDeps(root string, gitignore *ignore.GitIgnore, loader *GrammarLoader, detailLevel DetailLevel) ([]FileAnalysis, error) {
 	var analyses []FileAnalysis
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -134,8 +136,8 @@ func ScanForDeps(root string, gitignore *ignore.GitIgnore, loader *GrammarLoader
 			return nil
 		}
 
-		// Analyze file
-		analysis, err := loader.AnalyzeFile(path)
+		// Analyze file with the specified detail level
+		analysis, err := loader.AnalyzeFile(path, detailLevel)
 		if err != nil || analysis == nil {
 			return nil
 		}

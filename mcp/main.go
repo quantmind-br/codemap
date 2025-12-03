@@ -22,6 +22,12 @@ type PathInput struct {
 	Path string `json:"path" jsonschema:"Path to the project directory to analyze"`
 }
 
+type DepsInput struct {
+	Path   string `json:"path" jsonschema:"Path to the project directory to analyze"`
+	Detail int    `json:"detail,omitempty" jsonschema:"Detail level: 0=names only (default), 1=signatures, 2=full (with type fields)"`
+	Mode   string `json:"mode,omitempty" jsonschema:"Output mode: deps (default) shows dependency flow, api shows API surface (exported functions/types)"`
+}
+
 type DiffInput struct {
 	Path string `json:"path" jsonschema:"Path to the project directory to analyze"`
 	Ref  string `json:"ref,omitempty" jsonschema:"Git branch/ref to compare against (default: main)"`
@@ -42,6 +48,13 @@ type ListProjectsInput struct {
 	Pattern string `json:"pattern,omitempty" jsonschema:"Optional filter to match project names (case-insensitive substring)"`
 }
 
+type SymbolInput struct {
+	Path string `json:"path" jsonschema:"Path to the project directory"`
+	Name string `json:"name" jsonschema:"Symbol name to search (substring match, case-insensitive)"`
+	Kind string `json:"kind,omitempty" jsonschema:"Filter by symbol type: function, type, or all (default: all)"`
+	File string `json:"file,omitempty" jsonschema:"Filter to specific file path (substring match)"`
+}
+
 func main() {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "codemap",
@@ -57,7 +70,7 @@ func main() {
 	// Tool: get_dependencies - Get dependency graph
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_dependencies",
-		Description: "Get the dependency flow of a project. Shows external dependencies by language, internal import chains between files, hub files (most-imported), and function counts. Use this to understand how code connects and which files are most critical.",
+		Description: "Get the dependency flow of a project. Shows external dependencies by language, internal import chains between files, hub files (most-imported), and function counts. Use detail=1 for function signatures, detail=2 for full type information.",
 	}, handleGetDependencies)
 
 	// Tool: get_diff - Get changed files with impact analysis
@@ -90,10 +103,40 @@ func main() {
 		Description: "List project directories under a parent path. Use this to discover projects when you only know the general location (e.g., ~/Code) but not the exact folder name. Optionally filter by pattern to find specific projects. Returns directory names with file counts and primary language.",
 	}, handleListProjects)
 
+	// Tool: get_symbol - Search for symbols by name
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_symbol",
+		Description: "Search for functions and types by name. Returns matching symbols with file location (path:line). Use this to find specific code elements without browsing files. Supports filtering by kind (function/type) and file path.",
+	}, handleGetSymbol)
+
 	// Run server on stdio
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Printf("Server error: %v", err)
 	}
+}
+
+// validatePath validates and returns the absolute path
+func validatePath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+
+	// Expand ~ to home directory
+	if strings.HasPrefix(path, "~/") {
+		home := os.Getenv("HOME")
+		path = filepath.Join(home, path[2:])
+	}
+
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("invalid path: %w", err)
+	}
+
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("path does not exist: %s", absPath)
+	}
+
+	return absPath, nil
 }
 
 func textResult(text string) *mcp.CallToolResult {
@@ -114,13 +157,13 @@ func errorResult(text string) *mcp.CallToolResult {
 }
 
 func handleGetStructure(ctx context.Context, req *mcp.CallToolRequest, input PathInput) (*mcp.CallToolResult, any, error) {
-	absRoot, err := filepath.Abs(input.Path)
+	absRoot, err := validatePath(input.Path)
 	if err != nil {
-		return errorResult("Invalid path: " + err.Error()), nil, nil
+		return errorResult(err.Error()), nil, nil
 	}
 
-	gitignore := scanner.LoadGitignore(input.Path)
-	files, err := scanner.ScanFiles(input.Path, gitignore)
+	gitignore := scanner.LoadGitignore(absRoot)
+	files, err := scanner.ScanFiles(absRoot, gitignore)
 	if err != nil {
 		return errorResult("Scan error: " + err.Error()), nil, nil
 	}
@@ -138,16 +181,18 @@ func handleGetStructure(ctx context.Context, req *mcp.CallToolRequest, input Pat
 	return textResult(output), nil, nil
 }
 
-func handleGetDependencies(ctx context.Context, req *mcp.CallToolRequest, input PathInput) (*mcp.CallToolResult, any, error) {
-	absRoot, err := filepath.Abs(input.Path)
+func handleGetDependencies(ctx context.Context, req *mcp.CallToolRequest, input DepsInput) (*mcp.CallToolResult, any, error) {
+	absRoot, err := validatePath(input.Path)
 	if err != nil {
-		return errorResult("Invalid path: " + err.Error()), nil, nil
+		return errorResult(err.Error()), nil, nil
 	}
 
-	gitignore := scanner.LoadGitignore(input.Path)
+	gitignore := scanner.LoadGitignore(absRoot)
 	loader := scanner.NewGrammarLoader()
 
-	analyses, err := scanner.ScanForDeps(input.Path, gitignore, loader)
+	// Use the detail level from input (default 0 = names only)
+	detailLevel := scanner.DetailLevel(input.Detail)
+	analyses, err := scanner.ScanForDeps(absRoot, gitignore, loader, detailLevel)
 	if err != nil {
 		return errorResult("Scan error: " + err.Error()), nil, nil
 	}
@@ -157,11 +202,20 @@ func handleGetDependencies(ctx context.Context, req *mcp.CallToolRequest, input 
 		Mode:         "deps",
 		Files:        analyses,
 		ExternalDeps: scanner.ReadExternalDeps(absRoot),
+		DetailLevel:  input.Detail,
 	}
 
-	output := captureOutput(func() {
-		render.Depgraph(depsProject)
-	})
+	// Use API mode if requested
+	var output string
+	if input.Mode == "api" {
+		output = captureOutput(func() {
+			render.APIView(depsProject)
+		})
+	} else {
+		output = captureOutput(func() {
+			render.Depgraph(depsProject)
+		})
+	}
 
 	return textResult(output), nil, nil
 }
@@ -172,9 +226,9 @@ func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInpu
 		ref = "main"
 	}
 
-	absRoot, err := filepath.Abs(input.Path)
+	absRoot, err := validatePath(input.Path)
 	if err != nil {
-		return errorResult("Invalid path: " + err.Error()), nil, nil
+		return errorResult(err.Error()), nil, nil
 	}
 
 	diffInfo, err := scanner.GitDiffInfo(absRoot, ref)
@@ -186,8 +240,8 @@ func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInpu
 		return textResult("No files changed vs " + ref), nil, nil
 	}
 
-	gitignore := scanner.LoadGitignore(input.Path)
-	files, err := scanner.ScanFiles(input.Path, gitignore)
+	gitignore := scanner.LoadGitignore(absRoot)
+	files, err := scanner.ScanFiles(absRoot, gitignore)
 	if err != nil {
 		return errorResult("Scan error: " + err.Error()), nil, nil
 	}
@@ -211,8 +265,13 @@ func handleGetDiff(ctx context.Context, req *mcp.CallToolRequest, input DiffInpu
 }
 
 func handleFindFile(ctx context.Context, req *mcp.CallToolRequest, input FindInput) (*mcp.CallToolResult, any, error) {
-	gitignore := scanner.LoadGitignore(input.Path)
-	files, err := scanner.ScanFiles(input.Path, gitignore)
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	gitignore := scanner.LoadGitignore(absRoot)
+	files, err := scanner.ScanFiles(absRoot, gitignore)
 	if err != nil {
 		return errorResult("Scan error: " + err.Error()), nil, nil
 	}
@@ -252,20 +311,14 @@ Available tools:
   get_dependencies - Import/function analysis
   get_diff         - Changed files vs branch
   find_file        - Search by filename
-  get_importers    - Find what imports a file`, cwd, home)), nil, nil
+  get_importers    - Find what imports a file
+  get_symbol       - Search for functions/types by name`, cwd, home)), nil, nil
 }
 
 func handleListProjects(ctx context.Context, req *mcp.CallToolRequest, input ListProjectsInput) (*mcp.CallToolResult, any, error) {
-	// Expand ~ to home directory
-	path := input.Path
-	if strings.HasPrefix(path, "~/") {
-		home := os.Getenv("HOME")
-		path = filepath.Join(home, path[2:])
-	}
-
-	absPath, err := filepath.Abs(path)
+	absPath, err := validatePath(input.Path)
 	if err != nil {
-		return errorResult("Invalid path: " + err.Error()), nil, nil
+		return errorResult(err.Error()), nil, nil
 	}
 
 	entries, err := os.ReadDir(absPath)
@@ -355,10 +408,16 @@ func getProjectStats(path string) string {
 }
 
 func handleGetImporters(ctx context.Context, req *mcp.CallToolRequest, input ImportersInput) (*mcp.CallToolResult, any, error) {
-	gitignore := scanner.LoadGitignore(input.Path)
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	gitignore := scanner.LoadGitignore(absRoot)
 	loader := scanner.NewGrammarLoader()
 
-	analyses, err := scanner.ScanForDeps(input.Path, gitignore, loader)
+	// For importers, we only need basic info (imports)
+	analyses, err := scanner.ScanForDeps(absRoot, gitignore, loader, scanner.DetailNone)
 	if err != nil {
 		return errorResult("Scan error: " + err.Error()), nil, nil
 	}
@@ -391,6 +450,99 @@ func handleGetImporters(ctx context.Context, req *mcp.CallToolRequest, input Imp
 	}
 
 	return textResult(fmt.Sprintf("%d files import '%s':\n%s", len(importers), input.File, strings.Join(importers, "\n"))), nil, nil
+}
+
+func handleGetSymbol(ctx context.Context, req *mcp.CallToolRequest, input SymbolInput) (*mcp.CallToolResult, any, error) {
+	absRoot, err := validatePath(input.Path)
+	if err != nil {
+		return errorResult(err.Error()), nil, nil
+	}
+
+	gitignore := scanner.LoadGitignore(absRoot)
+	loader := scanner.NewGrammarLoader()
+
+	// Use signature detail level to get function signatures
+	analyses, err := scanner.ScanForDeps(absRoot, gitignore, loader, scanner.DetailSignature)
+	if err != nil {
+		return errorResult("Scan error: " + err.Error()), nil, nil
+	}
+
+	// Build query
+	query := scanner.SymbolQuery{
+		Name: input.Name,
+		Kind: input.Kind,
+		File: input.File,
+	}
+
+	matches := scanner.SearchSymbols(analyses, query)
+
+	if len(matches) == 0 {
+		msg := fmt.Sprintf("No symbols found matching '%s'", input.Name)
+		if input.Kind != "" && input.Kind != "all" {
+			msg += fmt.Sprintf(" (kind: %s)", input.Kind)
+		}
+		if input.File != "" {
+			msg += fmt.Sprintf(" in file '%s'", input.File)
+		}
+		return textResult(msg), nil, nil
+	}
+
+	// Format output
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("=== Symbol Search: \"%s\" ===\n", input.Name))
+	sb.WriteString(fmt.Sprintf("Path: %s\n\n", absRoot))
+	sb.WriteString(fmt.Sprintf("Found %d matches:\n\n", len(matches)))
+
+	funcCount := 0
+	typeCount := 0
+
+	for _, m := range matches {
+		if m.Kind == "function" {
+			funcCount++
+		} else {
+			typeCount++
+		}
+
+		sb.WriteString(fmt.Sprintf("  %s:%d\n", m.File, m.Line))
+
+		if m.Kind == "function" {
+			if m.Signature != "" {
+				sb.WriteString(fmt.Sprintf("  ├─ %s\n", m.Signature))
+			} else {
+				sb.WriteString(fmt.Sprintf("  ├─ func %s\n", m.Name))
+			}
+		} else {
+			sb.WriteString(fmt.Sprintf("  ├─ %s %s\n", m.TypeKind, m.Name))
+		}
+
+		if m.Exported {
+			sb.WriteString("  └─ exported\n")
+		} else {
+			sb.WriteString("  └─ private\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("───────────────────────────────────\n")
+	sb.WriteString(fmt.Sprintf("Matches: %d", len(matches)))
+	if funcCount > 0 && typeCount > 0 {
+		sb.WriteString(fmt.Sprintf(" (%d functions, %d types)", funcCount, typeCount))
+	} else if funcCount > 0 {
+		funcWord := "functions"
+		if funcCount == 1 {
+			funcWord = "function"
+		}
+		sb.WriteString(fmt.Sprintf(" (%d %s)", funcCount, funcWord))
+	} else if typeCount > 0 {
+		typeWord := "types"
+		if typeCount == 1 {
+			typeWord = "type"
+		}
+		sb.WriteString(fmt.Sprintf(" (%d %s)", typeCount, typeWord))
+	}
+	sb.WriteString("\n")
+
+	return textResult(sb.String()), nil, nil
 }
 
 // ANSI escape code pattern

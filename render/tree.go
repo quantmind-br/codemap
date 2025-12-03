@@ -103,6 +103,14 @@ func formatSize(size int64) string {
 	return fmt.Sprintf("%.1f%s", fsize, units[len(units)-1])
 }
 
+// formatTokens converts token count to human readable format (e.g., "12.5k")
+func formatTokens(tokens int) string {
+	if tokens < 1000 {
+		return fmt.Sprintf("%d", tokens)
+	}
+	return fmt.Sprintf("%.1fk", float64(tokens)/1000)
+}
+
 // Tree renders the file tree to stdout
 func Tree(project scanner.Project) {
 	files := project.Files
@@ -112,10 +120,12 @@ func Tree(project scanner.Project) {
 	// Calculate stats
 	totalFiles := len(files)
 	var totalSize int64 = 0
+	var totalTokens int = 0
 	var totalAdded, totalRemoved int = 0, 0
 	extCount := make(map[string]int)
 	for _, f := range files {
 		totalSize += f.Size
+		totalTokens += f.Tokens
 		totalAdded += f.Added
 		totalRemoved += f.Removed
 		if f.Ext != "" {
@@ -142,17 +152,7 @@ func Tree(project scanner.Project) {
 	// Get top large files
 	topLarge := getTopLargeFiles(files)
 
-	// Print header (match Python rich panel exactly - title in top border)
-	innerWidth := 64
-
-	// Title in top border line (like rich panel)
-	titleLine := fmt.Sprintf(" %s ", projectName)
-	padding := innerWidth - len(titleLine)
-	leftPad := padding / 2
-	rightPad := padding - leftPad
-	fmt.Printf("╭%s%s%s╮\n", strings.Repeat("─", leftPad), titleLine, strings.Repeat("─", rightPad))
-
-	// Stats line - different for diff mode
+	// Build stats line - different for diff mode
 	var statsLine string
 	if isDiffMode {
 		if totalRemoved > 0 {
@@ -161,20 +161,38 @@ func Tree(project scanner.Project) {
 			statsLine = fmt.Sprintf("Changed: %d files | +%d lines vs %s", totalFiles, totalAdded, project.DiffRef)
 		}
 	} else {
-		statsLine = fmt.Sprintf("Files: %d | Size: %s", totalFiles, formatSize(totalSize))
+		statsLine = fmt.Sprintf("Files: %d | Size: %s | Tokens: ~%s", totalFiles, formatSize(totalSize), formatTokens(totalTokens))
 	}
-	fmt.Printf("│ %-*s │\n", innerWidth-2, statsLine)
 
-	// Extensions line
+	// Build extensions line
+	var extLine string
 	if len(exts) > 0 {
 		extParts := make([]string, len(exts))
 		for i, e := range exts {
 			extParts[i] = fmt.Sprintf("%s (%d)", e.ext, e.count)
 		}
-		extLine := "Top Extensions: " + strings.Join(extParts, ", ")
-		fmt.Printf("│ %-*s │\n", innerWidth-2, extLine)
+		extLine = "Top Extensions: " + strings.Join(extParts, ", ")
 	}
 
+	// Calculate dynamic width based on content (minimum 64, or fit longest line)
+	titleLine := fmt.Sprintf(" %s ", projectName)
+	innerWidth := 64
+	if len(statsLine)+4 > innerWidth {
+		innerWidth = len(statsLine) + 4
+	}
+	if len(extLine)+4 > innerWidth {
+		innerWidth = len(extLine) + 4
+	}
+
+	// Print header box
+	padding := innerWidth - len(titleLine)
+	leftPad := padding / 2
+	rightPad := padding - leftPad
+	fmt.Printf("╭%s%s%s╮\n", strings.Repeat("─", leftPad), titleLine, strings.Repeat("─", rightPad))
+	fmt.Printf("│ %-*s │\n", innerWidth-2, statsLine)
+	if extLine != "" {
+		fmt.Printf("│ %-*s │\n", innerWidth-2, extLine)
+	}
 	fmt.Printf("╰%s╯\n", strings.Repeat("─", innerWidth))
 
 	// Build and render tree
@@ -338,6 +356,14 @@ func printTreeNode(node *treeNode, prefix string, isLast bool, topLarge map[stri
 				color = Bold + color
 			}
 
+			// Warning for large files (>8k tokens)
+			tokenWarning := ""
+			tokenWarningWidth := 0
+			if f.file.Tokens >= scanner.LargeFileTokens {
+				tokenWarning = " [!]"
+				tokenWarningWidth = 4
+			}
+
 			// Suffix: diff stats
 			suffix := ""
 			suffixWidth := 0
@@ -355,9 +381,9 @@ func printTreeNode(node *treeNode, prefix string, isLast bool, topLarge map[stri
 				suffixWidth = len(suffix)
 			}
 
-			display := prefix + displayName + suffix
-			colored := fmt.Sprintf("%s%s%s%s%s%s", color, prefix, displayName, Reset, Dim, suffix+Reset)
-			width := prefixWidth + len(displayName) + suffixWidth
+			display := prefix + displayName + suffix + tokenWarning
+			colored := fmt.Sprintf("%s%s%s%s%s%s%s%s", color, prefix, displayName, Reset, Dim, suffix, Reset+Red+tokenWarning+Reset, "")
+			width := prefixWidth + len(displayName) + suffixWidth + tokenWarningWidth
 			entries = append(entries, fileEntry{display, colored, width})
 		}
 

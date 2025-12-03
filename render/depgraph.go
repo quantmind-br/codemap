@@ -45,7 +45,6 @@ var stdlibNames = map[string]bool{
 	"react": true, "filepath": true, "embed": true,
 }
 
-
 // normalizeImport normalizes an import string
 func normalizeImport(imp, lang string) string {
 	imp = strings.Trim(imp, "\"'")
@@ -429,13 +428,19 @@ func Depgraph(project scanner.DepsProject) {
 
 	// Summary
 	totalFuncs := 0
+	totalTypes := 0
 	for _, f := range files {
 		totalFuncs += len(f.Functions)
+		totalTypes += len(f.Types)
 	}
 	internalCount := 0
 	for _, targets := range internalDeps {
 		internalCount += len(targets)
 	}
-	fmt.Printf("%d files · %d functions · %d deps\n", len(files), totalFuncs, internalCount)
+	if totalTypes > 0 {
+		fmt.Printf("%d files · %d functions · %d types · %d deps\n", len(files), totalFuncs, totalTypes, internalCount)
+	} else {
+		fmt.Printf("%d files · %d functions · %d deps\n", len(files), totalFuncs, internalCount)
+	}
 	fmt.Println()
 }

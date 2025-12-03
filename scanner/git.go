@@ -202,8 +202,8 @@ func AnalyzeImpact(root string, changedFiles []FileInfo) []ImpactInfo {
 			return nil
 		}
 
-		// Analyze file imports
-		analysis, err := loader.AnalyzeFile(path)
+		// Analyze file imports (only need basic info for impact analysis)
+		analysis, err := loader.AnalyzeFile(path, DetailNone)
 		if err != nil || analysis == nil {
 			return nil
 		}

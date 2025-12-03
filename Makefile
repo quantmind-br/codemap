@@ -1,4 +1,4 @@
-.PHONY: all build build-mcp run deps grammars clean
+.PHONY: all build build-mcp run deps grammars clean install install-mcp uninstall
 
 all: build
 
@@ -29,3 +29,32 @@ clean:
 	rm -f codemap codemap-mcp
 	rm -rf scanner/.grammar-build
 	rm -rf scanner/grammars
+
+# Installation paths
+PREFIX ?= $(HOME)/.local
+BINDIR ?= $(PREFIX)/bin
+GRAMMAR_DIR ?= $(PREFIX)/lib/codemap/grammars
+
+install: build
+	@echo "Installing codemap to $(BINDIR)..."
+	install -d $(BINDIR)
+	install -m 755 codemap $(BINDIR)/codemap
+	@if [ -d scanner/grammars ] && [ "$$(ls -A scanner/grammars 2>/dev/null)" ]; then \
+		echo "Installing grammars to $(GRAMMAR_DIR)..."; \
+		install -d $(GRAMMAR_DIR); \
+		cp -r scanner/grammars/* $(GRAMMAR_DIR)/; \
+	fi
+	@echo "Done! Run 'codemap --help' to get started."
+
+install-mcp: build-mcp
+	@echo "Installing codemap-mcp to $(BINDIR)..."
+	install -d $(BINDIR)
+	install -m 755 codemap-mcp $(BINDIR)/codemap-mcp
+	@echo "Done!"
+
+uninstall:
+	@echo "Removing codemap from $(BINDIR)..."
+	rm -f $(BINDIR)/codemap
+	rm -f $(BINDIR)/codemap-mcp
+	rm -rf $(PREFIX)/lib/codemap
+	@echo "Done!"
