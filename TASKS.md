@@ -141,45 +141,45 @@
 
 ### 3.1 Vector Storage (`graph/vectors.go`)
 
-- [ ] **3.1.1** Define `VectorIndex` interface
-- [ ] **3.1.2** Implement in-memory vector storage using `gob` serialization
-- [ ] **3.1.3** Implement Cosine Similarity search
-- [ ] **3.1.4** Optimize for <50k vectors target
-- [ ] **3.1.5** Benchmark search performance
+- [x] **3.1.1** Define `VectorIndex` interface
+- [x] **3.1.2** Implement in-memory vector storage using `gob` serialization
+- [x] **3.1.3** Implement Cosine Similarity search
+- [x] **3.1.4** Optimize for <50k vectors target
+- [x] **3.1.5** Benchmark search performance
 
 ### 3.2 Embedding Pipeline
 
-- [ ] **3.2.1** Implement `NodeToText(node)` strategy (Signature + DocString + Summary)
-- [ ] **3.2.2** Implement `EmbedNodes(nodes)` with batching
-- [ ] **3.2.3** Add progress bar for embedding generation
-- [ ] **3.2.4** Store embeddings alongside graph in `.codemap/vectors.gob`
+- [x] **3.2.1** Implement `NodeToText(node)` strategy (Signature + DocString + Summary)
+- [x] **3.2.2** Implement `EmbedNodes(nodes)` with batching
+- [x] **3.2.3** Add progress bar for embedding generation
+- [x] **3.2.4** Store embeddings alongside graph in `.codemap/vectors.gob`
 
 ### 3.3 Hybrid Search Engine (`analyze/retriever.go`)
 
-- [ ] **3.3.1** Implement vector search (top-k semantic matches)
-- [ ] **3.3.2** Implement graph search (name matching/fuzzy)
-- [ ] **3.3.3** Implement Reciprocal Rank Fusion for result merging
-- [ ] **3.3.4** Add context expansion (retrieve callers/callees of top results)
-- [ ] **3.3.5** Tune weights for optimal relevance
+- [x] **3.3.1** Implement vector search (top-k semantic matches)
+- [x] **3.3.2** Implement graph search (name matching/fuzzy)
+- [x] **3.3.3** Implement Reciprocal Rank Fusion for result merging
+- [x] **3.3.4** Add context expansion (retrieve callers/callees of top results)
+- [x] **3.3.5** Tune weights for optimal relevance
 
 ### 3.4 CLI Commands
 
-- [ ] **3.4.1** Implement `codemap search "natural language query"`
-- [ ] **3.4.2** Add `--limit` flag for result count
-- [ ] **3.4.3** Add `--expand` flag for context expansion
-- [ ] **3.4.4** Add `--json` output format
+- [x] **3.4.1** Implement `codemap search "natural language query"`
+- [x] **3.4.2** Add `--limit` flag for result count
+- [x] **3.4.3** Add `--expand` flag for context expansion
+- [x] **3.4.4** Add `--json` output format
 
 ### 3.5 MCP Tools
 
-- [ ] **3.5.1** Implement `semantic_search` MCP tool
-- [ ] **3.5.2** Add structured response with relevance scores
-- [ ] **3.5.3** Include code snippets in results
+- [x] **3.5.1** Implement `semantic_search` MCP tool
+- [x] **3.5.2** Add structured response with relevance scores
+- [x] **3.5.3** Include code snippets in results
 
 ### 3.6 Performance & Polish
 
-- [ ] **3.6.1** Profile embedding generation performance
-- [ ] **3.6.2** Add TUI progress bars for long operations
-- [ ] **3.6.3** Optimize memory usage for large codebases
+- [x] **3.6.1** Profile embedding generation performance
+- [x] **3.6.2** Add TUI progress bars for long operations
+- [x] **3.6.3** Optimize memory usage for large codebases
 - [ ] **3.6.4** Documentation and README updates
 
 ---
@@ -200,9 +200,9 @@
 |-------|-------------|-----------|----------|
 | Phase 1 | 48 | 48 | 100% |
 | Phase 2 | 27 | 27 | 100% |
-| Phase 3 | 22 | 0 | 0% |
+| Phase 3 | 22 | 21 | 95% |
 | Validation | 5 | 0 | 0% |
-| **Total** | **102** | **75** | **74%** |
+| **Total** | **102** | **96** | **94%** |
 
 ---
 
