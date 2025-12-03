@@ -195,6 +195,18 @@ func main() {
 		return
 	}
 
+	// Handle --embed mode
+	if *embedMode {
+		runEmbedMode(absRoot, *llmModel, *forceReindex, *jsonMode)
+		return
+	}
+
+	// Handle --search mode
+	if *searchMode {
+		runSearchMode(absRoot, *searchQuery, *searchLimit, *searchExpand, *llmModel, *jsonMode)
+		return
+	}
+
 	// Handle --deps mode separately
 	if *depsMode {
 		var changedFiles map[string]bool
