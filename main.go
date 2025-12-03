@@ -49,6 +49,13 @@ func main() {
 	llmModel := flag.String("model", "", "LLM model to use (overrides config)")
 	noCache := flag.Bool("no-cache", false, "Bypass cache for LLM requests")
 
+	// Search mode flags
+	searchMode := flag.Bool("search", false, "Search the codebase using natural language")
+	searchQuery := flag.String("q", "", "Search query (use with --search)")
+	searchLimit := flag.Int("limit", 10, "Number of search results to return")
+	searchExpand := flag.Bool("expand", false, "Expand results with callers/callees context")
+	embedMode := flag.Bool("embed", false, "Generate embeddings for the knowledge graph")
+
 	flag.Parse()
 
 	if *helpMode {
@@ -96,6 +103,14 @@ func main() {
 		fmt.Println("  --model <name>     LLM model to use (overrides config)")
 		fmt.Println("  --no-cache         Bypass cache for LLM requests")
 		fmt.Println()
+		fmt.Println("Search mode (--search):")
+		fmt.Println("  --q <query>        Natural language search query")
+		fmt.Println("  --limit <n>        Number of results (default: 10)")
+		fmt.Println("  --expand           Include callers/callees context")
+		fmt.Println()
+		fmt.Println("Embed mode (--embed):")
+		fmt.Println("  --force            Force re-embedding of all symbols")
+		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  codemap .                              # Tree with tokens")
 		fmt.Println("  codemap --deps .                       # Dependencies")
@@ -105,6 +120,8 @@ func main() {
 		fmt.Println("  codemap --query --from A --to B .      # Find path from A to B")
 		fmt.Println("  codemap --explain --symbol main .      # Explain main function")
 		fmt.Println("  codemap --summarize src/              # Summarize directory")
+		fmt.Println("  codemap --embed .                      # Generate embeddings")
+		fmt.Println("  codemap --search --q \"parse config\" . # Semantic search")
 		fmt.Println("  codemap --skyline --animate .          # Animated skyline")
 		fmt.Println()
 		fmt.Println("Output notes:")
