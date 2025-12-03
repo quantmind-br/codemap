@@ -93,10 +93,17 @@ type SummarizeModuleInput struct {
 	NoCache bool   `json:"no_cache,omitempty" jsonschema:"Bypass cache for this request"`
 }
 
+type SemanticSearchInput struct {
+	Path   string `json:"path" jsonschema:"Path to the project directory"`
+	Query  string `json:"query" jsonschema:"Natural language search query"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Maximum number of results (default: 10)"`
+	Expand bool   `json:"expand,omitempty" jsonschema:"Include callers/callees in results"`
+}
+
 func main() {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "codemap",
-		Version: "2.2.0",
+		Version: "2.3.0",
 	}, nil)
 
 	// Tool: get_structure - Get project tree view
@@ -176,6 +183,12 @@ func main() {
 		Name:        "summarize_module",
 		Description: "Summarize a module/directory using LLM. Reads source files and generates a high-level overview of the module's purpose, components, and dependencies. Requires a configured LLM provider.",
 	}, handleSummarizeModule)
+
+	// Tool: semantic_search - Hybrid semantic/graph search
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "semantic_search",
+		Description: "Search the codebase using natural language. Combines semantic vector search with graph-based name matching using Reciprocal Rank Fusion. Requires index (run 'codemap --index') and optionally embeddings (run 'codemap --embed' for semantic search). Returns matching symbols with relevance scores.",
+	}, handleSemanticSearch)
 
 	// Run server on stdio
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
@@ -382,7 +395,7 @@ func handleStatus(ctx context.Context, req *mcp.CallToolRequest, input EmptyInpu
 	cwd, _ := os.Getwd()
 	home := os.Getenv("HOME")
 
-	return textResult(fmt.Sprintf(`codemap MCP server v2.2.0
+	return textResult(fmt.Sprintf(`codemap MCP server v2.3.0
 Status: connected
 Local filesystem access: enabled
 Working directory: %s
@@ -400,7 +413,8 @@ Available tools:
   get_callers        - Find what calls a symbol (requires index)
   get_callees        - Find what a symbol calls (requires index)
   explain_symbol     - LLM-powered code explanation (requires index + LLM)
-  summarize_module   - LLM-powered module summary (requires LLM)`, cwd, home)), nil, nil
+  summarize_module   - LLM-powered module summary (requires LLM)
+  semantic_search    - Hybrid semantic/graph search (requires index)`, cwd, home)), nil, nil
 }
 
 func handleListProjects(ctx context.Context, req *mcp.CallToolRequest, input ListProjectsInput) (*mcp.CallToolResult, any, error) {
