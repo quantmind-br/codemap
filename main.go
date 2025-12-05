@@ -191,7 +191,7 @@ func main() {
 
 	// Handle --summarize mode
 	if *summarizeMode {
-		runSummarizeMode(absRoot, root, *llmModel, *noCache, *jsonMode)
+		runSummarizeMode(root, *llmModel, *noCache, *jsonMode)
 		return
 	}
 
@@ -847,26 +847,45 @@ func runExplainMode(absRoot, symbol, modelOverride string, noCache, jsonMode boo
 }
 
 // runSummarizeMode handles the --summarize command for LLM-powered module summarization.
-func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMode bool) {
-	// Resolve target path (can be relative to current directory or absolute)
-	var modulePath string
-	if filepath.IsAbs(targetPath) {
-		modulePath = targetPath
-	} else {
-		modulePath = filepath.Join(absRoot, targetPath)
+func runSummarizeMode(targetPath, modelOverride string, noCache, jsonMode bool) {
+	// Resolve target path to absolute
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving path: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Ensure path exists
-	info, err := os.Stat(modulePath)
+	info, err := os.Stat(absTarget)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: path not found: %s\n", targetPath)
 		os.Exit(1)
 	}
 
-	// Get relative path for display
-	relPath, _ := filepath.Rel(absRoot, modulePath)
-	if relPath == "" || relPath == "." {
-		relPath = filepath.Base(absRoot)
+	// Find project root (directory containing .codemap/)
+	projectRoot := findProjectRoot(absTarget)
+	if projectRoot == "" {
+		// Fall back to current working directory
+		projectRoot, _ = os.Getwd()
+	}
+
+	// Calculate relative path from project root to target
+	relPath, err := filepath.Rel(projectRoot, absTarget)
+	if err != nil || (len(relPath) > 1 && relPath[:2] == "..") {
+		// Target is outside project root - use target's parent as project root
+		if info.IsDir() {
+			projectRoot = absTarget
+			relPath = "."
+		} else {
+			projectRoot = filepath.Dir(absTarget)
+			relPath = filepath.Base(absTarget)
+		}
+	}
+
+	// For display purposes, use directory/file name if relPath is "."
+	displayPath := relPath
+	if displayPath == "." {
+		displayPath = filepath.Base(absTarget)
 	}
 
 	// Load configuration
@@ -900,14 +919,14 @@ func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMo
 	var sources []*analyze.SymbolSource
 
 	if info.IsDir() {
-		sources, err = analyze.ReadModuleSource(absRoot, relPath)
+		sources, err = analyze.ReadModuleSource(projectRoot, relPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading module: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
 		// Single file
-		source, err := analyze.ReadSymbolSource(absRoot, &graph.Node{
+		source, err := analyze.ReadSymbolSource(projectRoot, &graph.Node{
 			Kind: graph.KindFile,
 			Name: filepath.Base(targetPath),
 			Path: relPath,
@@ -936,7 +955,7 @@ func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMo
 
 	// Initialize cache
 	cacheOpts := cache.Options{
-		Dir:     filepath.Join(absRoot, ".codemap", "cache"),
+		Dir:     filepath.Join(projectRoot, ".codemap", "cache"),
 		Enabled: !noCache && cfg.Cache.Enabled,
 	}
 	responseCache, _ := cache.New(cacheOpts)
@@ -948,14 +967,14 @@ func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMo
 			// Cache hit
 			if jsonMode {
 				json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
-					"path":    relPath,
+					"path":    displayPath,
 					"files":   len(sources),
 					"cached":  true,
 					"model":   entry.Model,
 					"summary": entry.Response,
 				})
 			} else {
-				fmt.Printf("## %s\n\n", relPath)
+				fmt.Printf("## %s\n\n", displayPath)
 				fmt.Printf("*%d files* (cached)\n\n", len(sources))
 				fmt.Println(entry.Response)
 			}
@@ -964,11 +983,11 @@ func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMo
 	}
 
 	// Generate prompt
-	messages := analyze.SummarizeModulePrompt(relPath, sources)
+	messages := analyze.SummarizeModulePrompt(displayPath, sources)
 
 	// Make request
 	if !jsonMode {
-		fmt.Fprintf(os.Stderr, "Summarizing %s (%d files) using %s...\n", relPath, len(sources), cfg.LLM.Model)
+		fmt.Fprintf(os.Stderr, "Summarizing %s (%d files) using %s...\n", displayPath, len(sources), cfg.LLM.Model)
 	}
 
 	reqCtx, reqCancel := context.WithTimeout(context.Background(), time.Duration(cfg.LLM.Timeout)*time.Second)
@@ -1002,7 +1021,7 @@ func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMo
 		}
 
 		json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
-			"path":    relPath,
+			"path":    displayPath,
 			"files":   fileNames,
 			"cached":  false,
 			"model":   resp.Model,
@@ -1015,7 +1034,7 @@ func runSummarizeMode(absRoot, targetPath, modelOverride string, noCache, jsonMo
 			"duration_ms": resp.Duration.Milliseconds(),
 		})
 	} else {
-		fmt.Printf("\n## %s\n\n", relPath)
+		fmt.Printf("\n## %s\n\n", displayPath)
 		fmt.Printf("*%d files* | %s | %d tokens | %v\n\n", len(sources), resp.Model,
 			resp.Usage.TotalTokens, resp.Duration.Round(time.Millisecond))
 		fmt.Println(resp.Content)
@@ -1305,5 +1324,30 @@ func runSearchMode(absRoot, query string, limit int, expandContext bool, modelOv
 			}
 			fmt.Println()
 		}
+	}
+}
+
+// findProjectRoot searches upward from startPath for a directory containing .codemap/
+// Returns the project root path or empty string if not found.
+func findProjectRoot(startPath string) string {
+	current := startPath
+
+	// If startPath is a file, start from its directory
+	if info, err := os.Stat(current); err == nil && !info.IsDir() {
+		current = filepath.Dir(current)
+	}
+
+	for {
+		codemapDir := filepath.Join(current, ".codemap")
+		if info, err := os.Stat(codemapDir); err == nil && info.IsDir() {
+			return current
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached filesystem root
+			return ""
+		}
+		current = parent
 	}
 }

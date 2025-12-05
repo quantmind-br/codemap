@@ -1,112 +1,83 @@
-The `codemap` project is a data-intensive application focused on analyzing source code and building a knowledge graph, which is then used to interact with Large Language Models (LLMs). The data flow is characterized by a pipeline: **Source Code Scanning -> Graph Persistence -> LLM Interaction/Retrieval -> Output Rendering**.
+The project is a code analysis tool, likely generating a knowledge graph from source code and using LLMs for analysis. The data flow centers around configuration, code scanning, graph construction, and LLM interaction.
 
 # Data Flow Analysis
 
 ## Data Models Overview
 
-The core data models define the structure of the analyzed code and the application's configuration.
+The core data models define the application's configuration and the structure of the code graph.
 
-| Model Name | Location | Description | Key Fields |
+| Model | Location | Purpose | Key Fields/Structure |
 | :--- | :--- | :--- | :--- |
-| **`Config`** | `config/config.go` | Application configuration, loaded from YAML and environment variables. | `LLM` (`LLMConfig`), `Cache` (`CacheConfig`), `Debug` (bool). |
-| **`LLMConfig`** | `config/config.go` | Settings for LLM providers (OpenAI, Anthropic, Ollama). | `Provider`, `Model`, `OpenAIAPIKey`, `EmbeddingModel`, `Temperature`, `MaxTokens`. |
-| **`CacheConfig`** | `config/config.go` | Settings for the local file cache. | `Enabled` (bool), `Dir` (string), `TTLDays` (int). |
-| **`Symbol`** | `scanner/types.go` | Represents a code entity (function, struct, variable, etc.). The fundamental unit of analysis. | `ID` (string), `Name` (string), `Type` (string), `Kind` (string), `File` (string), `StartLine`, `EndLine`, `Docstring` (string). |
-| **`Call`** | `scanner/types.go` | Represents a function call or method invocation. | `ID` (string), `CallerID` (string), `CalleeID` (string), `File` (string), `Line` (int). |
-| **`Dependency`** | `scanner/types.go` | Represents a package or module import/dependency. | `ID` (string), `SourceFile` (string), `TargetPackage` (string). |
-| **`Graph`** | `graph/types.go` | The main data structure for the knowledge graph, holding all extracted data. | `Symbols` (map[string]*`Symbol`), `Calls` (map[string]*`Call`), `Dependencies` (map[string]*`Dependency`), `Vectors` (map[string][]float32). |
-| **`EmbeddingRequest`** | `analyze/client.go` | Data structure for requesting embeddings from an LLM provider. | `Model` (string), `Input` ([]string). |
-| **`EmbeddingResponse`** | `analyze/client.go` | Data structure for receiving embeddings from an LLM provider. | `Data` ([]`EmbeddingData`), `Usage` (`Usage`). |
+| **Config** | `config/config.go` | Application configuration, loaded from YAML and environment variables. | `LLM` (`LLMConfig`), `Cache` (`CacheConfig`), `Debug` (bool). |
+| **LLMConfig** | `config/config.go` | Settings for LLM providers and requests. | `Provider` (enum: Ollama, OpenAI, Anthropic, Gemini), `Model`, API Keys, URLs, `EmbeddingModel`, `Temperature`, `MaxTokens`. |
+| **CacheConfig** | `config/config.go` | Settings for the local file cache. | `Enabled` (bool), `Dir` (string), `TTLDays` (int). |
+| **Source** | `analyze/source.go` | Represents a piece of source code content for LLM processing. | `Path` (string), `Content` (string), `Language` (string), `Symbols` ([]`scanner.Symbol`). |
+| **Symbol** | `scanner/types.go` | Represents a code entity (function, class, variable) extracted by the scanner. | `ID` (string), `Name` (string), `Type` (string), `Path` (string), `StartLine`, `EndLine`, `Docstring` (string), `References` ([]string). |
+| **Graph Node/Edge** | `graph/types.go` | The fundamental units of the code knowledge graph. | **Node:** `ID`, `Type`, `Properties` (map[string]any). **Edge:** `SourceID`, `TargetID`, `Type`, `Properties`. |
+| **VectorStore** | `graph/vectors.go` | Stores embeddings for graph nodes to enable semantic search. | Key-value store mapping Node ID to vector embedding. |
 
 ## Data Transformation Map
 
-Data undergoes several transformations as it moves through the system:
+Data undergoes several key transformations as it moves through the system:
 
-| Stage | Input Data | Output Data | Transformation/Mechanism |
+| Stage | Input Data | Transformation/Component | Output Data |
 | :--- | :--- | :--- | :--- |
-| **Configuration Loading** | YAML/Environment Variables (Text) | `Config` (Go Struct) | `yaml.Unmarshal` (Deserialization), Environment Variable Overrides, `DefaultConfig` (Initialization). |
-| **Code Scanning** | Source Code (Text) | `Symbol`, `Call`, `Dependency` (Go Structs) | Tree-sitter parsing (`scanner/walker.go`), AST traversal, Query matching (`scanner/queries/*.scm`), Data extraction and normalization. |
-| **Graph Building** | `Symbol`, `Call`, `Dependency` (Go Structs) | `Graph` (Go Struct) | Aggregation and indexing of individual entities into maps keyed by ID. |
-| **Graph Persistence** | `Graph` (Go Struct) | `graph.gob` (Binary File) | `gob` encoding/decoding (`graph/store.go`). |
-| **Embedding Generation** | `Symbol` Docstrings/Code Snippets (Text) | Vector Embeddings ([]float32) | LLM API call (`analyze/client.go`), JSON serialization/deserialization of `EmbeddingRequest`/`EmbeddingResponse`. |
-| **LLM Prompting** | `Graph` data, User Query (Text) | LLM Prompt (Text) | Contextualization and formatting using templates (`analyze/prompts.go`). |
-| **LLM Response Parsing** | LLM Response (JSON/Text) | Structured Analysis (Text/Go Structs) | JSON parsing or text extraction from the LLM's output. |
-| **Output Rendering** | `Graph` data (Go Structs) | Console Output (Text/ASCII/Colors) | Data traversal and formatting logic in the `render` package (e.g., `render/tree.go`, `render/depgraph.go`). |
+| **1. Configuration Loading** | Defaults, YAML files, Environment variables. | `config.Load()`: YAML deserialization, environment variable overriding, merging. | Validated `*config.Config` object. |
+| **2. Code Scanning** | File system content (raw source code). | `scanner.Walker`, `scanner.Grammar`: Tree-sitter parsing, AST traversal. | Structured data: `[]scanner.Symbol`, `[]scanner.Call`, `[]scanner.Dependency`. |
+| **3. Graph Building** | Structured code data (`Symbol`, `Call`, `Dependency`). | `graph.Builder`: Mapping code entities to graph nodes and relationships (edges). | `graph.Store` (in-memory graph structure). |
+| **4. Embedding Generation** | Code content (e.g., function body, symbol definition). | `analyze.Embedder`: LLM API call to generate vector representation. | `[]float32` (vector embedding). |
+| **5. Graph Persistence** | In-memory `graph.Store` and `VectorStore`. | `graph.Store.Save()`: Serialization using `encoding/gob`. | Binary files (`.codemap/graph.gob`, `.codemap/vectors.gob`). |
+| **6. LLM Analysis** | User query, `analyze.Source` (context), `analyze.Prompts`. | `analyze.Client.Analyze()`: Prompt construction, API request/response. | Raw LLM response (JSON/text), then parsed into structured analysis. |
 
 ## Storage Interactions
 
-The application uses two primary storage mechanisms: a file-based cache and a persistent graph store.
+The application uses two primary storage mechanisms: file-based persistence for the knowledge graph and a file-based cache for LLM responses.
 
-### 1. Graph Persistence (Knowledge Graph)
-
-*   **Mechanism:** The entire knowledge graph, represented by the `graph.Graph` struct, is persisted to a single file, typically `.codemap/graph.gob`.
-*   **Technology:** Go's built-in `encoding/gob` package is used for serialization and deserialization. This is a binary format optimized for Go data structures.
-*   **Interaction:**
-    *   **Write:** `graph.Store.Save(g *Graph)` writes the `Graph` struct to the file.
-    *   **Read:** `graph.Store.Load()` reads the file and decodes it back into a `Graph` struct.
-*   **Data Stored:** `Symbols`, `Calls`, `Dependencies`, and `Vectors` (embeddings).
-
-### 2. Caching Mechanism
-
-*   **Mechanism:** A simple file-based cache is implemented in the `cache` package. It stores LLM responses to avoid redundant API calls.
-*   **Configuration:** Controlled by `config.CacheConfig` (`Enabled`, `Dir`, `TTLDays`).
-*   **Data Flow:**
-    1.  A cache key is generated from the LLM request (e.g., prompt, model, temperature).
-    2.  The `cache.Cache` object checks for the key in its directory (`.codemap/cache` by default).
-    3.  If a hit, the cached response (likely raw LLM output) is returned.
-    4.  If a miss, the LLM API is called, and the response is written to a file in the cache directory before being returned.
-*   **Persistence Pattern:** Write-through/Read-through caching pattern.
+| Storage Mechanism | Location | Data Model | Persistence Pattern |
+| :--- | :--- | :--- | :--- |
+| **Knowledge Graph** | `.codemap/graph.gob` | Graph Nodes and Edges | **Binary Serialization (Gob):** The entire in-memory graph structure is serialized to a binary file for fast loading and saving. |
+| **Vector Embeddings** | `.codemap/vectors.gob` | Vector Embeddings | **Binary Serialization (Gob):** The vector store (likely a map of ID to vector) is persisted separately. |
+| **LLM Response Cache** | `CacheConfig.Dir` (default: `.codemap/cache`) | LLM API responses (raw text/JSON) | **Key-Value File Cache:** The `cache` package implements a file-based cache. The cache key is likely a hash of the request/prompt. It supports a Time-To-Live (`TTLDays`) for expiry, although the default is no expiry (0). |
+| **Configuration** | `~/.config/codemap/config.yaml`, `.codemap/config.yaml` | `Config` | **YAML Serialization:** Human-readable configuration files are used for persistence. |
 
 ## Validation Mechanisms
 
-Data validation primarily occurs at the configuration and input stages.
+Data validation is primarily focused on the configuration and the integrity of the LLM interaction setup.
 
-### 1. Configuration Validation
+1.  **Configuration Validation (`config/config.go`):**
+    *   The `(*Config).Validate()` method ensures that required fields are present based on the selected LLM provider.
+    *   **Logic:** If `LLM.Provider` is set to a specific value (e.g., `ProviderOpenAI`), the corresponding API key (`OpenAIAPIKey`) must not be empty.
+    *   **Error Handling:** Validation failures result in a descriptive error message returned by `config.Load()`, preventing the application from starting with an incomplete configuration.
 
-*   **Location:** `config.Config.Validate()` in `config/config.go`.
-*   **Logic:** Checks for mandatory fields based on the selected LLM provider:
-    *   If `ProviderOllama`, checks if `OllamaURL` is set.
-    *   If `ProviderOpenAI`, checks if `OpenAIAPIKey` is set (or relies on environment variable override).
-    *   If `ProviderAnthropic`, checks if `AnthropicAPIKey` is set (or relies on environment variable override).
-    *   Ensures `Model` is set.
-    *   Performs range checks on numeric fields like `Timeout` and `MaxRetries` (must be non-negative).
-
-### 2. Data Integrity (Implicit)
-
-*   **Scanner:** The `scanner` package relies on the robustness of the Tree-sitter parsers. Data integrity is implicitly maintained by ensuring that extracted `Symbol`, `Call`, and `Dependency` structs are correctly populated from the Abstract Syntax Tree (AST).
-*   **Graph:** The `graph` package uses string IDs to maintain relationships between entities (e.g., `Call.CallerID` references a `Symbol.ID`). While there is no explicit foreign key validation, the graph structure itself enforces relationships.
+2.  **Input Validation (Implicit):**
+    *   The `scanner` package relies on the robustness of the Tree-sitter parsers. While it doesn't perform explicit data validation on the source code content, the parsing process implicitly validates the code's syntax and structure, failing gracefully or producing an incomplete AST on malformed input.
 
 ## State Management Analysis
 
-The application's state is managed through configuration, the in-memory graph, and the file-based cache.
+The application's state is managed across three main components:
 
-| State Component | Storage Location | Management Strategy |
-| :--- | :--- | :--- |
-| **Application Settings** | `config.Config` (In-memory struct) | Loaded once at startup (`config.Load()`) from multiple sources (defaults, user config, project config, env vars) and treated as immutable for the application's runtime. |
-| **Knowledge Graph** | `graph.Graph` (In-memory struct) | **Primary State.** Loaded from `.codemap/graph.gob` at the start of analysis/querying. It is updated during the scanning phase and persisted back to disk upon completion. |
-| **LLM Responses** | `cache.Cache` (File system) | **Secondary State.** Managed by a TTL (Time-To-Live) mechanism defined in `CacheConfig.TTLDays`. Responses are stored as files, providing persistence across runs. |
-| **LLM Client State** | `analyze.Client` (In-memory struct) | Manages transient state like rate limiting (`RequestsPerMin`) and retry logic (`MaxRetries`), ensuring controlled interaction with external APIs. |
+1.  **Configuration State:** The `*config.Config` object holds the global, immutable settings for the application's runtime. This is the initial state loaded at startup.
+2.  **In-Memory Graph State:** The `graph.Store` and `graph.VectorStore` hold the entire knowledge graph and its associated embeddings. This is the primary mutable state during the analysis phase.
+    *   The state is loaded from `.gob` files at the start of a graph operation and persisted back to disk upon completion.
+3.  **Cache State:** The `cache` package manages the state of past LLM interactions. This state is externalized to the file system and is managed independently of the main graph state, acting as a persistent layer for memoization.
+
+The overall approach is a **Load-Process-Save** pattern, where the graph state is loaded into memory, modified (e.g., by adding new symbols or embeddings), and then fully persisted back to disk.
 
 ## Serialization Processes
 
-The project uses two main serialization formats:
+The application uses two main serialization formats:
 
-### 1. YAML (Configuration)
-*   **Purpose:** Storing human-readable configuration.
-*   **Mechanism:** `gopkg.in/yaml.v3`.
-*   **Process:** YAML text is deserialized into `config.Config` structs.
+1.  **YAML (Human-Readable Configuration):**
+    *   **Purpose:** Configuration files (`config.yaml`).
+    *   **Mechanism:** The `gopkg.in/yaml.v3` library is used for deserializing configuration data into the `Config` struct.
 
-### 2. Gob (Graph Persistence)
-*   **Purpose:** Efficiently storing the complex, interconnected `graph.Graph` data structure.
-*   **Mechanism:** `encoding/gob`.
-*   **Process:** The `Graph` struct is serialized into a binary `.gob` file for fast loading and saving.
+2.  **Gob (Binary Data Persistence):**
+    *   **Purpose:** Persisting the core data structures of the knowledge graph and vector store.
+    *   **Mechanism:** The `encoding/gob` package is used to serialize Go data structures (`graph.Store`, vector data) into a compact binary format. This is chosen for performance in saving and loading complex, in-memory Go objects.
 
-### 3. JSON (LLM Communication)
-*   **Purpose:** Standard communication format for external LLM APIs (OpenAI, Anthropic, Ollama).
-*   **Mechanism:** `encoding/json`.
-*   **Process:**
-    *   **Outbound:** Go structs like `EmbeddingRequest` are serialized to JSON for the API request body.
-    *   **Inbound:** JSON responses from the LLM are deserialized into structs like `EmbeddingResponse` or parsed for the final text output.
+3.  **JSON (LLM Communication):**
+    *   **Purpose:** Communication with LLM APIs (e.g., OpenAI, Anthropic, Gemini).
+    *   **Mechanism:** The `analyze` package uses JSON for sending requests and receiving responses from the LLM providers. The raw JSON response is then deserialized into a structured format for further processing.
 
 ## Data Lifecycle Diagrams
 
@@ -114,28 +85,31 @@ The project uses two main serialization formats:
 
 ```mermaid
 graph TD
-    A[Source Code Files] --> B(Scanner Package);
-    B --> C{Tree-sitter Parsing};
-    C --> D[Extracted Entities: Symbol, Call, Dependency];
-    D --> E(Graph Builder);
-    E --> F[In-Memory Graph (graph.Graph)];
-    F --> G{Graph Store (gob)};
-    G --> H[.codemap/graph.gob];
-    H --> F;
+    A[Start Application] --> B(Load Config);
+    B --> C{Code Scanner};
+    C --> D[Read Source Files];
+    D --> E(Tree-sitter Parsing);
+    E --> F[Extract Symbols, Calls, Deps];
+    F --> G{Graph Builder};
+    G --> H[Load Graph from .gob];
+    G --> I[Create/Update Nodes & Edges];
+    I --> J[Generate Embeddings (LLM API)];
+    J --> K[Update Vector Store];
+    K --> L[Save Graph & Vectors to .gob];
+    L --> M[Graph Ready for Query];
 ```
 
 ### 2. LLM Interaction and Caching Lifecycle
 
 ```mermaid
 graph TD
-    A[User Query] --> B(Analyze Package);
-    B --> C{Cache Check (cache.Cache)};
+    A[User Query] --> B(Construct Prompt);
+    B --> C{Check Cache};
     C -- Cache Hit --> D[Return Cached Response];
-    C -- Cache Miss --> E(LLM Client);
-    E --> F{LLM API Request (JSON)};
-    F --> G[LLM Response (JSON)];
-    G --> H(Cache Write);
-    H --> I[Cache Directory];
-    G --> J[Parse Response];
-    J --> D;
+    C -- Cache Miss --> E{LLM Client Factory};
+    E --> F(LLM Provider API Request);
+    F --> G[Receive LLM Response];
+    G --> H(Parse Response);
+    H --> I[Store Response in Cache];
+    I --> J[Return Final Analysis];
 ```

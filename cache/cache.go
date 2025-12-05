@@ -120,10 +120,10 @@ func (c *Cache) Get(key string) (*Entry, bool) {
 	}
 
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	path := c.keyPath(key)
 	data, err := os.ReadFile(path)
+	c.mu.RUnlock() // Release read lock before calling recordMiss/recordHit
+
 	if err != nil {
 		c.recordMiss()
 		return nil, false

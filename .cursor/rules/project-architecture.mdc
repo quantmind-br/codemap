@@ -1,0 +1,38 @@
+---
+description: Defines the core layered architecture, package responsibilities, the central data model (Code Graph), and persistence rules.
+globs:
+  - "**"
+alwaysApply: true
+---
+
+# Project Architecture and Data Flow
+
+This project is a layered, pipeline-based CLI tool for code analysis. All development must respect the strict boundaries and data flow between packages.
+
+## 1. Core Architectural Layers (Pipeline Pattern)
+
+The system operates as a pipeline: **Scanner -> Graph -> Analyze/Render**.
+
+| Package | Responsibility | Key Data Produced/Consumed |
+| :--- | :--- | :--- |
+| `@scanner` | Code ingestion, AST parsing, entity extraction (using Tree-sitter). | `FileAnalysis`, `FuncInfo`, `TypeInfo` structs. |
+| `@graph` | Knowledge Graph construction, storage, and querying (Repository Pattern). | `graph.CodeGraph` (Central Data Model). |
+| `@analyze` | LLM interaction, embedding generation, RAG retrieval (Strategy Pattern). | `analyze.Client` interface, `SearchResult`. |
+| `@render` | CLI output, TUI visualization (Skyline, Depgraph). | `bubbletea`, `lipgloss` components. |
+| `@config` | Application settings and environment variables. | `config.Config` struct. |
+
+## 2. Central Data Model: The Code Graph
+
+The `graph.CodeGraph` struct is the single source of truth for the codebase structure.
+
+- **Deterministic IDs:** All `Node` entities must have a stable, deterministic ID generated via `graph.GenerateNodeID(path, symbol)` (SHA256 hash). This is crucial for incremental updates and persistence.
+- **Persistence:** The graph is persisted using `encoding/gob` and compressed with `compress/gzip` to the file `.codemap/graph.gob`. Do not attempt to manually parse or modify this binary file.
+- **Index Integrity:** The in-memory indexes (`nodesByPath`, `edgesByFrom`) are *not* persisted. After loading the binary file, the `CodeGraph.RebuildIndexes()` method must be called to ensure the in-memory state is always consistent with the loaded data.
+
+## 3. Scanner and Parsing
+
+The `@scanner` package acts as a Data Mapper, translating raw code into the domain model.
+
+- **Rule:** The `@scanner` package is the sole consumer of `github.com/tree-sitter/go-tree-sitter`. All parsing logic is isolated here.
+- **Grammar Specification:** The exact structural information extracted is defined by the Tree-sitter query files located in `@scanner/queries/*.scm`. Consult these files when debugging parsing issues.
+- **File Filtering:** File system traversal must respect the `.gitignore` rules loaded by `scanner/git.go`.

@@ -526,12 +526,15 @@ func handleGetImporters(ctx context.Context, req *mcp.CallToolRequest, input Imp
 
 	targetBase := filepath.Base(input.File)
 	targetNoExt := strings.TrimSuffix(targetBase, filepath.Ext(targetBase))
-	targetDir := filepath.Dir(input.File)
+	
+	// Resolve target directory absolutely to compare with file paths
+	targetDir := filepath.Join(absRoot, filepath.Dir(input.File))
 
 	var importers []string
 	for _, a := range analyses {
-		// Skip files in the same directory (same package in Go)
-		if filepath.Dir(a.Path) == targetDir {
+		// Skip files in the same directory only for Go (implicit package imports)
+		// For other languages (TS, JS, Python), importing sibling files is common and significant
+		if a.Language == "go" && filepath.Dir(a.Path) == targetDir {
 			continue
 		}
 		for _, imp := range a.Imports {

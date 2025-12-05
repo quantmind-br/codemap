@@ -2,115 +2,108 @@
 
 ## Internal Dependencies Map
 
-The project is structured into several cohesive Go packages, with the `main` package acting as the orchestrator, handling command-line arguments and coordinating the workflow.
+The project is structured into several cohesive Go packages, with dependencies flowing from the core logic (`scanner`, `graph`) up to the application entry point (`main`) and user interface (`render`, `analyze`).
 
-| Package | Description | Key Dependencies |
+| Dependent Package | Dependencies (Internal) | Description |
 | :--- | :--- | :--- |
-| **main** (`/`) | CLI entry point and application orchestrator. | `analyze`, `cache`, `config`, `graph`, `render`, `scanner` |
-| **scanner** (`/scanner`) | Core component for code analysis, parsing, and git operations. | `config`, `graph`, External: `tree-sitter/go-tree-sitter`, `sabhiram/go-gitignore` |
-| **analyze** (`/analyze`) | Handles LLM-based operations (explain, summarize, embed). | `config`, `cache`, `graph`, External: `modelcontextprotocol/go-sdk` |
-| **graph** (`/graph`) | Manages the knowledge graph (building, storing, querying). | `scanner`, `config`, `cache` (implied for persistence) |
-| **render** (`/render`) | Responsible for all CLI output and visualizations (tree, skyline, depgraph). | `scanner`, `graph`, External: `charmbracelet/bubbletea`, `charmbracelet/lipgloss` |
-| **config** (`/config`) | Handles application configuration loading and parsing. | External: `gopkg.in/yaml.v3` |
-| **cache** (`/cache`) | Provides a persistent caching layer for LLM responses and graph data. | (Low internal dependencies) |
-
-**Key Internal Relationships:**
-
-*   **Core Data Flow:** `scanner` generates raw code data (symbols, calls) -> `graph` consumes this data to build the index -> `analyze` and `render` consume data from `graph` for their respective outputs.
-*   **Configuration:** `config` is a foundational dependency, used by `main`, `scanner`, and `analyze` to determine behavior (e.g., which LLM model to use).
-*   **Decoupling:** The `analyze` package is decoupled from specific LLM implementations via a factory pattern (see Dependency Injection Patterns section).
+| `main` (Root) | `config`, `cache`, `scanner`, `graph`, `analyze`, `render` | Application entry point, responsible for initialization and orchestrating the main workflow. |
+| `analyze` | `config`, `graph` | Contains the logic for code analysis using LLMs. It depends on `config` for API keys/settings and `graph` for retrieving and storing code data. |
+| `scanner` | `config`, `graph` | The core component for parsing source code. It depends on `config` for settings (e.g., ignored files) and interacts with `graph` to populate the code structure data. |
+| `graph` | `config` | Manages the in-memory representation of the codebase (the knowledge graph) and handles persistence (loading/saving `.gob` files). Depends on `config` for file paths. |
+| `render` | `graph` | Handles the Terminal User Interface (TUI) and visualization of the code map and dependency graphs. It consumes data structures provided by the `graph` package. |
+| `cache` | `graph` | Likely handles caching logic for the graph data, interacting with the `graph` package's persistence layer. |
+| `mcp` | (None visible) | Appears to be a separate entry point or utility for the Model Context Protocol integration, likely depending on `config` and the external MCP SDK. |
 
 ## External Libraries Analysis
 
-The project relies heavily on external libraries for core functionality (parsing, TUI, LLM integration, configuration).
+The project is built on Go and relies heavily on libraries for TUI, code parsing, and configuration management.
 
-| Library | Version | Purpose | Category |
-| :--- | :--- | :--- | :--- |
-| `github.com/tree-sitter/go-tree-sitter` | `v0.25.0` | Core dependency for code parsing and abstract syntax tree (AST) generation. | Code Analysis |
-| `github.com/modelcontextprotocol/go-sdk` | `v1.1.0` | Standardized client for interacting with various LLM providers (MCP). | LLM/AI Integration |
-| `github.com/charmbracelet/bubbletea` | `v1.3.10` | Framework for building terminal user interfaces (TUI), used for skyline/animation modes. | TUI/Rendering |
-| `github.com/ebitengine/purego` | `v0.9.1` | Used for calling C functions from Go, likely for interfacing with the compiled Tree-sitter grammars. | Interoperability |
-| `github.com/sabhiram/go-gitignore` | (latest commit) | Utility for parsing and applying `.gitignore` rules to file scanning. | Utility/Filesystem |
-| `golang.org/x/term` | `v0.37.0` | Standard library extension for terminal manipulation (e.g., raw mode). | System/Utility |
-| `gopkg.in/yaml.v3` | `v3.0.1` | Used by the `config` package for loading configuration files. | Configuration |
-
-**Indirect Dependencies of Note (from `go.sum`):**
-
-*   `github.com/charmbracelet/lipgloss`: Used for styling and rendering the TUI elements.
-*   `golang.org/x/oauth2`: Suggests that some LLM or external service integrations (likely OpenAI/Anthropic) use OAuth2 for authentication.
+| Library | Version | Purpose |
+| :--- | :--- | :--- |
+| `github.com/tree-sitter/go-tree-sitter` | `v0.25.0` | **Core Dependency:** Provides the necessary bindings for the `scanner` package to perform abstract syntax tree (AST) parsing for various languages. |
+| `github.com/ebitengine/purego` | `v0.9.1` | Used for calling C functions from Go, likely to interface with the compiled Tree-sitter grammars (C libraries). |
+| `github.com/charmbracelet/bubbletea` | `v1.3.10` | **TUI Framework:** The primary library for building the interactive terminal user interface, used by the `render` package. |
+| `github.com/charmbracelet/lipgloss` | `v1.1.0` | Used for styling and layout within the TUI, supporting `bubbletea`. |
+| `github.com/modelcontextprotocol/go-sdk` | `v1.1.0` | **Service SDK:** Integration with the Model Context Protocol (MCP), suggesting a standardized way to interact with LLMs. |
+| `gopkg.in/yaml.v3` | `v3.0.1` | Used by the `config` package for parsing configuration files. |
+| `github.com/sabhiram/go-gitignore` | (latest) | Used by the `scanner` package to respect `.gitignore` rules when traversing the file system. |
+| `golang.org/x/term` | `v0.37.0` | Standard Go library for terminal I/O and state management. |
 
 ## Service Integrations
 
-The primary integration points are with Large Language Models (LLMs) and their associated APIs, managed within the `analyze` package.
+The project's core function involves integrating with various Large Language Models (LLMs) for code analysis. This is managed primarily within the `analyze` package.
 
-| Service/System | Integration Point | Protocol/Client |
+| Service/API | Integration Point | Description |
 | :--- | :--- | :--- |
-| **OpenAI API** | `analyze/openai.go` | Implemented via `modelcontextprotocol/go-sdk` or a direct client (likely the former, which wraps the latter). |
-| **Anthropic API** | `analyze/anthropic.go` | Implemented via `modelcontextprotocol/go-sdk` or a direct client. |
-| **Ollama** | `analyze/ollama.go` | Integration for local/self-hosted LLM inference. |
-| **Model Context Protocol (MCP)** | `github.com/modelcontextprotocol/go-sdk` | Acts as a unified interface for all LLM interactions, abstracting the specific provider details. |
-| **Git** | `scanner/git.go` | Direct execution of git commands (e.g., `git diff`) to determine changed files. |
+| **Model Context Protocol (MCP)** | `github.com/modelcontextprotocol/go-sdk` | A primary integration layer, likely used to abstract the specific LLM provider. The `mcp` directory suggests a dedicated component for this. |
+| **Anthropic** | `analyze/anthropic.go` | Direct integration with the Anthropic API (e.g., Claude models). |
+| **Google Gemini** | `analyze/gemini.go` | Direct integration with the Gemini API. |
+| **OpenAI** | `analyze/openai.go` | Direct integration with the OpenAI API (e.g., GPT models). |
+| **Ollama** | `analyze/ollama.go` | Integration with the Ollama local LLM server, enabling local or self-hosted model analysis. |
+
+The `analyze` package acts as a set of API clients, providing a unified interface (`analyze/client.go`) to the core application logic, regardless of the underlying LLM provider.
 
 ## Dependency Injection Patterns
 
-The project uses a **Factory Pattern** for instantiating LLM clients, which is a form of dependency management.
+The project utilizes a **Factory Pattern** for managing the LLM clients, which is a form of dependency management.
 
-*   **Factory Implementation:** The `analyze/factory.go` file is responsible for creating the correct `analyze.Client` implementation (e.g., `OpenAIClient`, `AnthropicClient`, `OllamaClient`).
-*   **Configuration-Driven Instantiation:** The choice of which concrete client to instantiate is driven by the application configuration loaded by the `config` package.
-*   **Interface-Based Decoupling:** The `main` package and other high-level logic interact with the `analyze` functionality through an interface (likely `analyze.Client`), ensuring they are decoupled from the specific LLM provider being used.
+*   **Factory Pattern:** The existence of `analyze/factory.go` indicates that the application uses a factory function (`NewClient` or similar) to instantiate the correct LLM client (`AnthropicClient`, `GeminiClient`, etc.) based on runtime configuration (e.g., the `LLM_PROVIDER` setting).
+*   **Constructor Injection (Implicit):** The main application logic in `main.go` is responsible for creating instances of the core components (`Config`, `GraphStore`, `Scanner`, `Analyzer`) and passing them to dependent components during initialization. For example, the `Analyzer` likely receives the `Config` and `Graph` instances in its constructor.
+
+There is no evidence of a full-fledged Dependency Injection container (like `wire` or `fx`), suggesting manual wiring of dependencies in the `main` function.
 
 ## Module Coupling Assessment
 
-| Module Pair | Coupling Level | Rationale |
-| :--- | :--- | :--- |
-| **main <-> All Internal Packages** | High (Orchestration) | `main` explicitly imports and calls functions from `analyze`, `cache`, `config`, `graph`, `render`, and `scanner`. This is expected for a CLI entry point. |
-| **scanner <-> graph** | High (Data Producer/Consumer) | `scanner` is tightly coupled to `graph` as it produces the raw data (symbols, calls) that `graph` consumes to build its internal structure. Changes to the data model in `graph/types.go` would require changes in `scanner`. |
-| **analyze <-> config** | Medium | `analyze` relies on `config` to determine which LLM client to use and to retrieve API keys/model names. This is a necessary configuration dependency. |
-| **render <-> charmbracelet/\*** | High (External) | The `render` package is built directly on top of the `bubbletea` and `lipgloss` TUI libraries, making it highly coupled to this external ecosystem. |
-| **scanner <-> tree-sitter** | High (External) | The core functionality of `scanner` (parsing) is entirely dependent on the `go-tree-sitter` library and the pre-built grammars. |
+| Module | Cohesion | Coupling | Rationale |
+| :--- | :--- | :--- | :--- |
+| `scanner` | High | Low-to-Moderate | Highly focused on AST parsing and symbol extraction. Coupled to `config` and the `graph` data structures, but its core logic is isolated via `tree-sitter`. |
+| `graph` | High | Low | Manages the single responsibility of data storage and retrieval. Coupled only to `config` for file paths. |
+| `analyze` | Moderate | High | Responsible for multiple external LLM integrations. The coupling to external services is managed by the internal `factory` pattern, but it is tightly coupled to `config` and `graph` data structures. |
+| `render` | High | Low | Focused on TUI presentation. Coupled to `graph` for data and `bubbletea`/`lipgloss` for presentation logic. |
+| `config` | High | Low | Only handles configuration loading. Low coupling to other internal modules (only provides data). |
 
-**Cohesion:** The packages exhibit good cohesion:
-*   `scanner` focuses solely on code structure analysis.
-*   `graph` focuses solely on data storage and retrieval.
-*   `analyze` focuses solely on LLM interactions.
+The overall architecture shows good separation of concerns, with the `graph` package acting as the central data hub, minimizing direct coupling between `scanner`, `analyze`, and `render`.
 
 ## Dependency Graph
 
-The project follows a layered architecture, with dependencies flowing generally downwards from the orchestrator (`main`) to the core utilities (`config`, `cache`) and data producers (`scanner`), and then to the consumers (`graph`, `analyze`, `render`).
+The following graph illustrates the primary internal dependencies, with external dependencies noted at the package level.
 
 ```mermaid
 graph TD
-    A[main] --> B(config);
+    A[main.go] --> B(config);
     A --> C(cache);
     A --> D(scanner);
     A --> E(graph);
     A --> F(analyze);
     A --> G(render);
 
-    D --> E;
-    D --> B;
-    D --> H(External: tree-sitter);
-    D --> I(External: go-gitignore);
-
-    E --> C;
-    E --> D;
-
     F --> B;
-    F --> C;
     F --> E;
-    F --> J(External: modelcontextprotocol/go-sdk);
+    F --> F1(Anthropic SDK);
+    F --> F2(Gemini SDK);
+    F --> F3(OpenAI SDK);
+    F --> F4(Ollama);
+    F --> F5(MCP SDK);
 
-    G --> D;
+    D --> B;
+    D --> E;
+    D --> D1(go-tree-sitter);
+    D --> D2(purego);
+    D --> D3(go-gitignore);
+
+    E --> B;
+    E --> E1(encoding/gob);
+
     G --> E;
-    G --> K(External: charmbracelet/bubbletea);
-    G --> L(External: charmbracelet/lipgloss);
+    G --> G1(bubbletea);
+    G --> G2(lipgloss);
 
-    B --> M(External: gopkg.in/yaml.v3);
+    B --> B1(yaml.v3);
+    C --> E;
 ```
 
 ## Potential Dependency Issues
 
-1.  **Tight Coupling to Tree-sitter Grammars:** The `scanner` package is highly dependent on the specific structure and compilation of the Tree-sitter grammars (visible in `/scanner/.grammar-build`). Any update to a grammar requires a rebuild process (`scanner/build-grammars.sh`), which introduces complexity and a build-time dependency on C/C++ toolchains (via `purego` and the underlying C libraries).
-2.  **Monolithic Orchestrator (`main`):** The `main` package is responsible for initializing and coordinating all major modes (`--index`, `--query`, `--explain`, `--summarize`, `--deps`, etc.). While common in CLI tools, this makes `main.go` large and tightly coupled to every other package. Refactoring the mode logic into a dedicated `cmd` package could improve modularity.
-3.  **LLM Client Proliferation:** While the Factory pattern in `analyze` is good, the existence of separate files for `anthropic.go`, `openai.go`, and `ollama.go` suggests that the `modelcontextprotocol/go-sdk` might not fully abstract all necessary client-specific logic, or that the project maintains direct client implementations for flexibility. This increases the surface area for maintenance when new LLM features are released.
-4.  **TUI Dependency:** The `render` package's reliance on the `charmbracelet` ecosystem is a significant dependency. While it provides rich TUI features, it ties the rendering logic to a specific set of terminal capabilities and libraries.
+1.  **Tight Coupling to External LLM SDKs:** While the `analyze/factory.go` pattern helps, the `analyze` package contains separate files for each LLM provider (`anthropic.go`, `gemini.go`, etc.). If the project were to support many more LLMs, this package could become bloated. The reliance on the **Model Context Protocol (MCP)** SDK suggests an attempt to mitigate this, but the direct provider files indicate that specific SDKs are still being used.
+2.  **Tree-sitter Complexity:** The `scanner` package relies on `github.com/ebitengine/purego` and the C bindings of Tree-sitter grammars. This introduces a dependency on CGO/FFI, which can complicate cross-platform compilation and deployment. The large number of grammar subdirectories (`/scanner/.grammar-build/`) confirms this complexity.
+3.  **TUI Framework Lock-in:** The `render` package is tightly coupled to the `charmbracelet/bubbletea` ecosystem. While this is a powerful and popular choice for TUI, switching to a different rendering method (e.g., web UI, simple CLI output) would require a complete rewrite of the `render` package.

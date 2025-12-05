@@ -1,0 +1,29 @@
+---
+description: Rules for interacting with external LLM APIs (caching, token management) and rendering TUI components using Charmbracelet.
+globs:
+  - "analyze/**/*.go"
+  - "render/**/*.go"
+alwaysApply: false
+---
+
+# LLM Interaction and TUI Rendering Patterns
+
+This rule set focuses on the two major external integration points: Large Language Models (LLMs) and the Terminal User Interface (TUI).
+
+## 1. LLM Interaction in `@analyze`
+
+The `@analyze` package manages all external LLM communication, ensuring efficiency and cost control.
+
+- **Caching:** Before making any LLM API call (e.g., in `analyze/client.go`), always check the local file cache managed by the `@cache` package. Use the `--no-cache` flag as the only mechanism to bypass this check.
+- **Token Management:** Use the token counting utilities in `@analyze/tokens.go` to estimate prompt size and ensure requests stay within the configured `MaxTokens` limit, especially when constructing RAG prompts.
+- **Prompt Engineering:** All LLM prompts must be generated using structured templates defined in `@analyze/prompts.go`. Do not hardcode prompt strings directly in client files (e.g., `openai.go`).
+- **Context Retrieval:** For RAG-based modes (`--explain`, `--summarize`, `--search`), the prompt must be augmented with relevant code snippets retrieved from the `graph.Graph` via the source retrieval service (`analyze/retriever.go`).
+
+## 2. TUI Rendering with Charmbracelet
+
+The `@render` package is dedicated to creating rich terminal output using the `charmbracelet` ecosystem.
+
+- **Libraries:** Use `bubbletea` for managing interactive TUI state (e.g., the skyline animation) and `lipgloss` for all styling, colors, and layout. Avoid using raw ANSI escape codes.
+- **Rendering Logic:** Rendering functions (e.g., `render/depgraph.go`, `render/tree.go`) must consume the processed data structs from the `@graph` and `@scanner` packages and transform them into `lipgloss`-styled strings or `bubbletea` models.
+- **Output Format:** When the `--json` flag is present, the `render` package must bypass TUI rendering and output the raw data structs (e.g., `scanner.DepsProject`) serialized as JSON. This is the standard machine-readable output path.
+- **Skyline View:** The `render/skyline.go` component must accurately map file size/token count data from the scanner to the height of the rendered "buildings."

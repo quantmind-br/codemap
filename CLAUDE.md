@@ -1,61 +1,89 @@
-# CLAUDE.md
+# CLAUDE.md: Claude Code Configuration
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Welcome, Claude. This document provides persistent context for working with the `codemap` repository.
+
+## Project Overview
+`codemap` is a sophisticated command-line interface (CLI) tool written in Go. Its core function is to transform a codebase into a structural **Knowledge Graph** using `tree-sitter` for deep parsing. This graph is then leveraged for intelligent, context-aware analysis via **Retrieval-Augmented Generation (RAG)** with various LLMs (Anthropic, OpenAI, Ollama, Gemini). The architecture is a highly decoupled, configuration-driven pipeline, exhibiting characteristics of a Layered and Hexagonal design.
 
 ## Build & Run Commands
 
+The project is a CLI tool. All interactions are via the main executable.
+
 ```bash
-# Build CLI
+# 1. Build the main CLI executable
 go build -o codemap .
 
-# Build MCP server
-go build -o codemap-mcp ./mcp/
-
-# Run with make
-make run                          # Default tree view
-make run DIR=/path DEPS=1         # Dependency mode
-make run SKYLINE=1 ANIMATE=1      # Animated skyline
-
-# Build tree-sitter grammars (one-time setup for --deps mode)
+# 2. Build tree-sitter grammars (CRITICAL SETUP)
+# This compiles the C grammars using purego and is a necessary one-time setup.
+# MUST be re-run if any file in scanner/queries/*.scm is modified.
 make grammars
 
-# Development
-go fmt ./...                      # Format code
-go vet ./...                      # Lint code
-make clean                        # Remove artifacts
-make install                      # Install to ~/.local/bin
+# 3. Common Operational Modes
+
+# Index Mode: Builds or updates the knowledge graph index (.codemap/graph.gob)
+./codemap --index .
+./codemap --index --force . # Force a full rebuild
+
+# LLM Explain Mode: Uses LLM to explain a specific symbol, retrieving context from the graph
+./codemap --explain --symbol "graph.NewBuilder" --model claude-3-opus .
+
+# LLM Search Mode: Performs semantic search using vector embeddings
+./codemap --search --q "where is the LLM client initialized" .
+
+# Dependency Mode: Generates a dependency flow map (functions, types, imports)
+./codemap --deps .
+
+# Default Mode: Generates a file tree view with token/size estimates
+./codemap .
+
+# JSON Output: Use the --json flag for machine-readable output in any mode
+./codemap --deps . --json
 ```
 
-## Architecture
+## Architecture Overview
 
-codemap is a Go CLI that generates token-efficient codebase visualizations for LLMs.
+The system operates as a data processing pipeline, with clear separation of concerns across layers.
 
-**Core Pipeline:**
-1. **scanner/** - File system traversal and dependency analysis
-   - `walker.go` - `ScanFiles()` walks directories respecting .gitignore, `ScanForDeps()` for dependency mode
-   - `deps.go` - Tree-sitter based import/function extraction for 16 languages
-   - `grammar.go` + `grammar_unix.go`/`grammar_windows.go` - Platform-specific tree-sitter loading
-   - `queries/` - Tree-sitter query files (.scm) for each supported language
+### 1. Core Components and Responsibilities
+| Component (Package) | Purpose and Responsibility | Design Pattern |
+| :--- | :--- | :--- |
+| **`scanner`** | **Infrastructure/Parsing.** Orchestrates `tree-sitter` to generate ASTs and extract raw structural data (Symbols, Calls, Dependencies) using language-specific `.scm` queries. | Data Mapper |
+| **`graph`** | **Data Layer/Repository.** The central domain layer. Manages `Node`/`Edge` creation, persistence (`.codemap/graph.gob`), and vector store management (`vectors.go`). | Repository Pattern |
+| **`analyze`** | **Application/Intelligence.** Abstracts all LLM interactions. Handles prompt construction, token counting, embedding generation, and the RAG pipeline via `retriever.go`. | Strategy/Adapter/Factory Pattern |
+| **`render`** | **Presentation Layer.** Formats analyzed data for user consumption (TUI via `bubbletea`, dependency graphs, skyline views). | Presentation Layer |
+| **`config`** | **Configuration Root.** Loads and validates settings from YAML and environment variables, ensuring correct LLM credentials and file paths. | Configuration Root |
 
-2. **render/** - Output visualization
-   - `tree.go` - `Tree()` generates main file tree view
-   - `depgraph.go` - `Depgraph()` generates dependency flow visualization
-   - `skyline.go` - ASCII cityscape visualization with optional animation
-   - `colors.go` - Terminal color handling per language
+### 2. LLM Integration Strategy (Hexagonal Core)
+The `/analyze` package isolates the core analysis logic from external LLM services.
 
-3. **main.go** - CLI entry point with flag parsing (`--deps`, `--diff`, `--skyline`, `--animate`, `--ref`)
+*   **Interface Contract:** The `analyze.Client` interface (in `analyze/client.go`) defines the contract for all LLM operations (`GenerateResponse`, `GetTokenCount`).
+*   **Factory Pattern:** `analyze/factory.go` instantiates the correct concrete client (`anthropic.go`, `openai.go`, `ollama.go`, `gemini.go`) based on the `LLM.Provider` configuration.
+*   **RAG Flow:** The `analyze.Retriever` service performs vector similarity searches against the `graph/vectors.go` store to retrieve relevant code context, which is then injected into the LLM prompt. The logic in `/analyze/tokens.go` is crucial for managing context window limits.
 
-4. **mcp/** - MCP server exposing 7 tools: `status`, `list_projects`, `get_structure`, `get_dependencies`, `get_diff`, `find_file`, `get_importers`
+## Development Conventions & Gotchas
 
-**Key Dependencies:**
-- `tree-sitter/go-tree-sitter` - AST parsing for dependency analysis
-- `ebitengine/purego` - Dynamic loading of tree-sitter grammars
-- `charmbracelet/bubbletea` - Terminal animation for skyline mode
+### Go Style and Error Handling
+*   **Language:** Standard Go (Golang). Ensure all code passes `go fmt` and `go vet`.
+*   **Error Handling:** Errors are checked immediately. Critical failures (e.g., missing configuration, failed graph load) print a descriptive message to `os.Stderr` and exit with `os.Exit(1)`.
+*   **Dependencies:** Dependencies are manually wired in `main.go` (Constructor Injection). Avoid introducing a heavy DI container.
 
-**Grammar Location:** Tree-sitter `.so`/`.dylib` files must exist in `scanner/grammars/` or be specified via `CODEMAP_GRAMMAR_DIR` env var.
+### Data Persistence and State Management
+*   **Primary State:** The `graph.Store` is the single source of truth. It is persisted to `.codemap/graph.gob` using **Gob encoding** for fast serialization of complex Go objects, often wrapped in Gzip compression.
+*   **Deterministic IDs:** Graph nodes use a stable, deterministic ID generation scheme (`graph.GenerateNodeID`) based on file path and symbol name. This is crucial for incremental indexing.
+*   **Caching:** LLM responses are cached in the local file system (`.codemap/cache`). When testing new prompt engineering or model changes, always use the `--no-cache` flag to force a fresh API call and bypass the `cache` package.
 
-**Testing:**
-There are no automated tests. Changes must be verified manually by running `codemap` against real projects:
-- `./codemap .` (Basic tree)
-- `./codemap --deps .` (Dependency mode)
-- `./codemap --diff` (Diff mode)
+### Tree-sitter Gotcha (CRITICAL)
+The `scanner` package relies on compiled C libraries for `tree-sitter` grammars, managed via `purego`. If you modify any grammar query file (`scanner/queries/*.scm`), you **must** run `make grammars` to recompile the shared libraries before the `scanner` package will reflect the changes. The application will fail with a "missing grammar" error if this step is skipped.
+
+### Configuration Priority
+The `config` package prioritizes settings in this order:
+1. Environment Variables (e.g., `OPENAI_API_KEY`)
+2. Project-level YAML (`.codemap/config.yaml`)
+3. User-level YAML (`~/.config/codemap/config.yaml`)
+4. Hardcoded defaults.
+
+## Key External Dependencies
+*   `github.com/tree-sitter/go-tree-sitter`: Core AST parsing engine.
+*   `github.com/ebitengine/purego`: Enables C interop for Tree-sitter without Cgo.
+*   `github.com/charmbracelet/bubbletea`: TUI framework used by the `/render` package.
+*   `github.com/modelcontextprotocol/go-sdk`: Integration for standardized LLM interaction.

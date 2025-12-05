@@ -34,6 +34,12 @@ func NewClient(cfg *config.Config) (LLMClient, error) {
 	case config.ProviderAnthropic:
 		return NewAnthropicClient(cfg.LLM.AnthropicAPIKey, clientCfg)
 
+	case config.ProviderGemini:
+		return NewGeminiClient(cfg.LLM.GeminiAPIKey, cfg.LLM.GeminiBaseURL, clientCfg)
+
+	case "mock":
+		return NewMockClient(clientCfg), nil
+
 	default:
 		return nil, fmt.Errorf("unknown provider: %s", cfg.LLM.Provider)
 	}

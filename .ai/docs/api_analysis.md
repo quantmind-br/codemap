@@ -1,138 +1,175 @@
-The project at `.` is a **Command Line Interface (CLI) tool** written in **Go (Golang)**. Its primary function is to analyze, visualize, and generate context for codebases, with a strong focus on integration with Large Language Models (LLMs).
+This project, **codemap**, is a **Command Line Interface (CLI) application** written in **Go**. It does not expose a traditional network-based API (like REST, GraphQL, or gRPC). Instead, its primary "API" is its command-line interface, which provides various analysis and visualization tools for a codebase.
 
-The project **does not expose a traditional HTTP/REST API**. The primary interface for developers is the command line tool itself, which is documented below under "APIs Served by This Project" (referring to the CLI commands).
+The project's core functionality involves consuming external APIs from various **Large Language Model (LLM) providers** (OpenAI, Anthropic, Gemini, Ollama) to perform advanced code analysis, explanation, and semantic search.
 
-The project **consumes** several external APIs, primarily for its LLM-powered features.
+The following documentation focuses on the CLI interface as the primary served API and the LLM integrations as the external dependencies.
 
 # API Documentation
 
 ## APIs Served by This Project
 
-Since this is a CLI application, the "API" consists of the command-line interface and its flags. The tool's main entry point is `main.go`, which uses the standard `flag` package for command parsing.
+The primary interface is the command-line tool itself. The most "API-like" interactions are the LLM-powered modes, which are documented below.
 
 ### Endpoints (CLI Commands)
 
-| Method | Path | Description |
+The CLI commands act as the functional endpoints of the application.
+
+| Method | Path (Command) | Description |
 | :--- | :--- | :--- |
-| `codemap [path]` | `(default)` | Generates a file tree view with token estimates and file sizes. |
-| `codemap --deps [path]` | `deps` | Generates a dependency flow map (functions, types, and imports). |
-| `codemap --skyline [path]` | `skyline` | Generates a city skyline visualization of the codebase. |
-| `codemap --diff [path]` | `diff` | Shows only files changed compared to a specified Git reference. |
-| `codemap --index [path]` | `index` | Builds the internal knowledge graph index (`.codemap/graph.gob`). |
-| `codemap --query [path]` | `query` | Queries the knowledge graph for symbol relationships. |
-| `codemap --explain [path]` | `explain` | Uses an LLM to explain a specific symbol. |
-| `codemap --summarize [path]` | `summarize` | Uses an LLM to summarize a module or directory. |
-| `codemap --search [path]` | `search` | Performs semantic search on the codebase using natural language. |
-| `codemap --embed [path]` | `embed` | Generates vector embeddings for the knowledge graph. |
+| `POST` | `codemap --explain` | Explains a specific symbol (function, type, etc.) using an LLM. |
+| `POST` | `codemap --summarize` | Summarizes a module or directory using an LLM. |
+| `POST` | `codemap --search` | Performs a natural language semantic search over the codebase. |
+| `GET` | `codemap --query` | Queries the internal knowledge graph for dependencies and paths. |
+| `POST` | `codemap --index` | Builds or rebuilds the internal knowledge graph index. |
+| `POST` | `codemap --embed` | Generates vector embeddings for the knowledge graph. |
 
-#### Endpoint Details
+#### `codemap --explain`
 
-**1. `codemap --deps` (Dependency Graph Mode)**
+Explains a specific symbol in the codebase using a configured LLM.
 
-*   **Method and Path:** `codemap --deps [path]`
-*   **Description:** Scans the codebase using Tree-sitter grammars to build a dependency graph of functions, types, and imports.
-*   **Request:**
-    *   **Params:**
-        *   `--detail <level>` (int): Detail level for symbols (0=names, 1=signatures, 2=full).
-        *   `--api` (bool): If true, filters the output to show only the public API surface (compact view).
-        *   `--json` (bool): If true, outputs the result as JSON.
-*   **Response (Success):**
-    *   **Format (Default):** Rendered dependency graph in the terminal.
-    *   **Format (`--json`):** A JSON object of type `scanner.DepsProject` containing `Root`, `Mode`, `Files` (list of `scanner.FileAnalysis`), `ExternalDeps`, `DiffRef`, and `DetailLevel`.
-*   **Authentication:** None (local file system access).
+*   **Method and Path**: `codemap --explain --symbol <name> [path]`
+*   **Description**: Fetches the source code for the specified symbol, constructs a prompt, and sends it to the LLM for a detailed explanation.
+*   **Request**:
+    *   **Params**:
+        *   `--symbol <name>` (Required): The name of the symbol (e.g., `main`, `NewClient`).
+        *   `[path]` (Optional): The root directory of the codebase (defaults to `.`).
+        *   `--model <name>` (Optional): Overrides the configured LLM model.
+        *   `--no-cache` (Optional): Bypasses the LLM response cache.
+        *   `--json` (Optional): Outputs the result in JSON format.
+*   **Response (Success)**: A detailed, natural language explanation of the symbol's purpose and implementation.
+*   **Response (Error)**: A message indicating the symbol was not found or an error occurred during the LLM request (e.g., API key missing, network error).
+*   **Authentication**: None (CLI tool). Relies on environment variables for LLM API keys (see Authentication & Security).
+*   **Examples**:
+    ```bash
+    codemap --explain --symbol runExplainMode .
+    codemap --explain --symbol NewClient --model gemini-2.5-flash .
+    ```
 
-**2. `codemap --index` (Knowledge Graph Indexing)**
+#### `codemap --summarize`
 
-*   **Method and Path:** `codemap --index [path]`
-*   **Description:** Parses the entire codebase to build a serialized knowledge graph (`graph.CodeGraph`) stored at `.codemap/graph.gob`.
-*   **Request:**
-    *   **Params:**
-        *   `--force` (bool): Forces a full rebuild, bypassing incremental update checks.
-        *   `--output <path>` (string): Custom path for the graph file.
-        *   `--json` (bool): Outputs indexing status as JSON.
-*   **Response (Success):**
-    *   **Format (Default):** Console output confirming index status (up-to-date, incremental update, or full rebuild) and statistics (nodes, edges).
-    *   **Format (`--json`):** A JSON object with `status`, `path`, `nodes`, `edges`, and `indexed_at`.
-*   **Authentication:** None.
+Summarizes the contents and purpose of a given module or directory using an LLM.
 
-**3. `codemap --query` (Knowledge Graph Query)**
+*   **Method and Path**: `codemap --summarize [path]`
+*   **Description**: Gathers all relevant code from the specified path, chunks it if necessary, and requests a summary from the LLM.
+*   **Request**:
+    *   **Params**:
+        *   `[path]` (Required): The path to the directory or file to summarize.
+        *   `--model <name>` (Optional): Overrides the configured LLM model.
+        *   `--no-cache` (Optional): Bypasses the LLM response cache.
+        *   `--json` (Optional): Outputs the result in JSON format.
+*   **Response (Success)**: A natural language summary of the module/directory.
+*   **Response (Error)**: A message indicating a failure in scanning or LLM communication.
+*   **Authentication**: None (CLI tool). Relies on environment variables for LLM API keys.
+*   **Examples**:
+    ```bash
+    codemap --summarize ./analyze
+    ```
 
-*   **Method and Path:** `codemap --query [path]`
-*   **Description:** Traverses the knowledge graph to find relationships between symbols.
-*   **Request:**
-    *   **Params:**
-        *   `--from <symbol>` (string): Starting symbol for the trace (outgoing edges).
-        *   `--to <symbol>` (string): Target symbol for pathfinding (incoming edges).
-        *   `--depth <n>` (int): Maximum traversal depth (default: 5).
-        *   `--json` (bool): Outputs results as JSON.
-*   **Response (Success):**
-    *   **Format (Default):** Rendered graph traversal path in the terminal.
-    *   **Format (`--json`):** A JSON object representing the query results (e.g., list of paths/nodes).
-*   **Authentication:** None.
+#### `codemap --search`
 
-**4. `codemap --explain` (LLM Symbol Explanation)**
+Performs a semantic search over the codebase using vector embeddings and an LLM.
 
-*   **Method and Path:** `codemap --explain [path]`
-*   **Description:** Uses a configured LLM to generate an explanation for a specific code symbol.
-*   **Request:**
-    *   **Params:**
-        *   `--symbol <name>` (string, **required**): The name of the symbol to explain.
-        *   `--model <name>` (string): Overrides the configured LLM model.
-        *   `--no-cache` (bool): Bypasses the local cache for the LLM request.
-        *   `--json` (bool): Outputs the result as JSON.
-*   **Response (Success):**
-    *   **Format (Default):** Markdown-formatted explanation from the LLM.
-    *   **Format (`--json`):** A JSON object containing the explanation text.
-*   **Authentication:** Requires configuration of API keys for external LLM services (see **External API Dependencies**).
+*   **Method and Path**: `codemap --search --q <query> [path]`
+*   **Description**: Uses the knowledge graph's embeddings to find code snippets semantically related to the natural language query.
+*   **Request**:
+    *   **Params**:
+        *   `--q <query>` (Required): The natural language search query (e.g., `"how do I parse the configuration file"`).
+        *   `[path]` (Optional): The root directory of the codebase (defaults to `.`).
+        *   `--limit <n>` (Optional): Number of results to return (default: 10).
+        *   `--expand` (Optional): Includes callers/callees context for each result.
+        *   `--json` (Optional): Outputs the result in JSON format.
+*   **Response (Success)**: A list of relevant code symbols, their file paths, and surrounding context.
+*   **Authentication**: None (CLI tool). Requires a configured embedding model (usually the same as the LLM model).
+*   **Examples**:
+    ```bash
+    codemap --search --q "find all functions that call the OpenAI API" .
+    ```
 
 ### Authentication & Security
 
-*   **Authentication:** The CLI tool itself requires no authentication as it operates on the local file system.
-*   **Security:** Security considerations are focused on the **consumed external APIs**. API keys for services like OpenAI and Anthropic must be configured securely, typically via environment variables or a local configuration file (`config.go` suggests a configuration mechanism). The tool uses a local cache (`codemap/cache`) to reduce repeated external API calls.
+The `codemap` CLI tool itself does not require authentication. However, its LLM-powered features rely on API keys for external services.
+
+*   **Mechanism**: API Keys via Environment Variables.
+*   **Configuration**: The application reads configuration from a `config.Config` struct, which is populated from environment variables.
+    *   **OpenAI**: Requires `OPENAI_API_KEY`.
+    *   **Anthropic**: Requires `ANTHROPIC_API_KEY`.
+    *   **Gemini**: Requires `GEMINI_API_KEY`.
+    *   **Ollama**: Does not require an API key, as it is typically self-hosted.
 
 ### Rate Limiting & Constraints
 
-*   **Internal:** No explicit internal rate limiting. Performance is constrained by local CPU/disk I/O and the complexity of Tree-sitter parsing.
-*   **External:** Rate limiting is imposed by the consumed LLM services (OpenAI, Anthropic, etc.). The application relies on the underlying HTTP client and LLM SDKs to handle standard network errors, but no explicit retry/circuit breaker logic is immediately visible in the high-level `main.go` flow.
+*   **Internal**: No explicit internal rate limiting is implemented in the CLI tool.
+*   **External**: The tool is subject to the rate limits imposed by the external LLM providers (OpenAI, Anthropic, Gemini). Users should ensure their usage adheres to the quotas of their respective API accounts.
 
 ## External API Dependencies
 
-The project relies heavily on external LLM providers for its advanced analysis features. The `codemap/analyze` package contains clients for these services.
+The project consumes APIs from multiple Large Language Model (LLM) providers. The integration is managed through the `analyze` package, which defines a common `LLMClient` interface.
 
 ### Services Consumed
 
-| Service Name & Purpose | Base URL/Configuration | Endpoints Used | Authentication Method | Error Handling | Retry/Circuit Breaker Configuration |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **OpenAI API** (LLM Analysis) | Configured via `config.OpenAI.BaseURL` (default: `api.openai.com`) | `/v1/chat/completions`, `/v1/embeddings` | API Key (`config.OpenAI.APIKey`) | Standard SDK error handling. | Not explicitly configured in `main.go` or `config.go`. Relies on SDK defaults. |
-| **Anthropic API** (LLM Analysis) | Configured via `config.Anthropic.BaseURL` (default: `api.anthropic.com`) | `/v1/messages` | API Key (`config.Anthropic.APIKey`) | Standard SDK error handling. | Not explicitly configured. Relies on SDK defaults. |
-| **Ollama** (Local LLM) | Configured via `config.Ollama.BaseURL` (default: `http://localhost:11434`) | `/api/generate`, `/api/embeddings` | None (assumes local/internal network access) | Standard HTTP client error handling. | Not explicitly configured. |
+#### 1. OpenAI API
 
-#### Configuration Details (`config/config.go`)
+*   **Service Name & Purpose**: OpenAI. Used for general-purpose code explanation, summarization, and semantic search.
+*   **Base URL/Configuration**: `https://api.openai.com/v1/`
+    *   The base URL is configured within the `analyze/openai.go` client.
+    *   Configuration is loaded via `config.Config`.
+*   **Endpoints Used**:
+    *   **`POST /v1/chat/completions`**: Used for the `Explain` and `Summarize` operations.
+    *   **`POST /v1/embeddings`**: Used by the embedding client for the `Embed` operation.
+*   **Authentication Method**: Bearer Token (`Authorization: Bearer <OPENAI_API_KEY>`). The key is read from the environment variable `OPENAI_API_KEY`.
+*   **Error Handling**:
+    *   The client handles HTTP errors and returns a structured error message.
+    *   Specific error codes (e.g., 401 for invalid key, 429 for rate limit) are likely handled by the underlying Go HTTP client, but the `analyze` package primarily returns a generic `fmt.Errorf` on failure.
+*   **Retry/Circuit Breaker Configuration**: No explicit retry or circuit breaker logic is visible in the client implementation. It relies on a single HTTP request.
 
-The application uses a configuration structure (`config.Config`) to manage access to these services.
+#### 2. Anthropic API
 
-*   **API Keys:** Keys are loaded from environment variables or a configuration file.
-    *   `OpenAI.APIKey`
-    *   `Anthropic.APIKey`
-*   **Model Selection:** The specific LLM model can be configured globally or overridden via the `--model` flag.
-*   **Timeouts:** The `analyze.Client` likely uses a default HTTP client, which may have a configurable or default timeout, but this is not exposed as a top-level CLI flag.
+*   **Service Name & Purpose**: Anthropic (Claude). Used for general-purpose code explanation, summarization, and semantic search.
+*   **Base URL/Configuration**: `https://api.anthropic.com/v1/`
+    *   The base URL is configured within the `analyze/anthropic.go` client.
+    *   Configuration is loaded via `config.Config`.
+*   **Endpoints Used**:
+    *   **`POST /v1/messages`**: Used for the `Explain` and `Summarize` operations.
+*   **Authentication Method**: API Key via a custom header (`x-api-key: <ANTHROPIC_API_KEY>`). The key is read from the environment variable `ANTHROPIC_API_KEY`.
+*   **Error Handling**: Similar to the OpenAI client, it handles HTTP errors and returns a structured error.
+*   **Retry/Circuit Breaker Configuration**: No explicit retry or circuit breaker logic is visible.
+
+#### 3. Google Gemini API
+
+*   **Service Name & Purpose**: Google Gemini. Used for general-purpose code explanation, summarization, and semantic search.
+*   **Base URL/Configuration**: Uses the Google GenAI SDK, which abstracts the base URL.
+    *   Configuration is loaded via `config.Config`.
+*   **Endpoints Used**:
+    *   The client uses the `google/generativeai` Go SDK's `GenerateContent` method.
+*   **Authentication Method**: API Key, typically passed to the SDK client initialization. The key is read from the environment variable `GEMINI_API_KEY`.
+*   **Error Handling**: Relies on the error handling provided by the Google GenAI SDK.
+*   **Retry/Circuit Breaker Configuration**: Relies on the SDK's internal resilience mechanisms.
+
+#### 4. Ollama API
+
+*   **Service Name & Purpose**: Ollama. Used for local, self-hosted LLM operations.
+*   **Base URL/Configuration**: Configurable base URL, defaults to `http://localhost:11434`.
+    *   The base URL is configured within the `analyze/ollama.go` client and can be overridden via configuration.
+*   **Endpoints Used**:
+    *   **`POST /api/generate`**: Used for the `Explain` and `Summarize` operations.
+    *   **`POST /api/embeddings`**: Used by the embedding client for the `Embed` operation.
+*   **Authentication Method**: None (typically used in a trusted, local environment).
+*   **Error Handling**: Standard HTTP error handling.
+*   **Retry/Circuit Breaker Configuration**: No explicit retry or circuit breaker logic is visible.
 
 ### Integration Patterns
 
-*   **Client Factory:** The `analyze/factory.go` file is responsible for creating the correct LLM client (`analyze.Client`) based on the configuration (`--model` flag or default settings).
-*   **Caching:** The `codemap/cache` package is used to store results of expensive LLM requests (e.g., explanations, summaries) to prevent redundant API calls. This is bypassed with the `--no-cache` flag.
-*   **Retrieval-Augmented Generation (RAG):** The `--search`, `--explain`, and `--summarize` modes utilize the internal knowledge graph (`codemap/graph`) and vector embeddings (`codemap/analyze/embed.go`) to retrieve relevant code context before making the external LLM API call.
+*   **Client Abstraction**: The project uses a common interface (`analyze.LLMClient`) to abstract different LLM providers, allowing the core logic (`runExplainMode`, `runSummarizeMode`, etc.) to be provider-agnostic.
+*   **Configuration-Driven**: The specific LLM client (OpenAI, Anthropic, Gemini, or Ollama) is instantiated by an `analyze.ClientFactory` based on the model name specified in the configuration or via the `--model` flag.
+*   **Caching**: A local file-based cache (`cache.Cache`) is used to store LLM responses, preventing redundant API calls for the same prompt/symbol explanation. This improves performance and reduces external API costs. The cache can be bypassed with the `--no-cache` flag.
 
 ## Available Documentation
 
+The project includes internal documentation and development plans, but no formal, external API specification (like an OpenAPI/Swagger file) is present, which is expected for a CLI tool.
+
 | Path | Description | Quality Evaluation |
 | :--- | :--- | :--- |
-| `README.md` | Project overview, installation, and basic usage examples. | **High.** Provides a good starting point for users. |
-| `main.go` (Help Output) | Comprehensive documentation of all CLI flags and modes. | **High.** Serves as the primary API reference for the CLI. |
-| `/.ai/docs/api_analysis.md` | (Self-referential) This document, once generated. | N/A |
-| `/.ai/docs/data_flow_analysis.md` | Internal analysis of data flow within the application. | **Medium.** Useful for understanding internal component interaction. |
-| `/.ai/docs/dependency_analysis.md` | Internal analysis of code dependencies. | **Medium.** Useful for understanding internal component interaction. |
-| `/development-docs/` | Contains several detailed plans for feature implementation (e.g., knowledge graph, LLM integration). | **High.** Excellent for understanding the *design* and *future direction* of the LLM integrations. |
-| `/scanner/queries/*.scm` | Tree-sitter query files. | **Technical.** Essential for developers extending language support or understanding how code is parsed for dependency analysis. |
-
-**Documentation Quality Evaluation:** The CLI interface is well-documented via the `--help` flag and `README.md`. The internal LLM integrations are complex but have good supporting design documentation in `/development-docs`. The lack of a formal OpenAPI/Swagger specification is expected, as there is no HTTP API.
+| `./README.md` | Project overview and basic usage instructions for the CLI. | **Good**: Provides the entry point for understanding the tool's functionality. |
+| `./.ai/docs/api_analysis.md` | Pre-existing analysis document. | **Unknown**: Could contain valuable insights into the internal API structure. |
+| `./development-docs/` | Contains various development plans (`0001-enhanced-code-analysis-plan.md`, `0004-gemini-integration-plan.md`, etc.). | **High**: Excellent for understanding planned and implemented features, especially LLM integrations. |
+| `./main.go` | The source code for the CLI entry point, which defines all available commands and flags. | **Definitive**: The ultimate source of truth for the CLI "API" contract. |

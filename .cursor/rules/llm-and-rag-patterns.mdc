@@ -1,0 +1,35 @@
+---
+description: Rules for interacting with external LLM APIs (caching, RAG, embedding fallback) and rendering TUI components using Charmbracelet.
+globs:
+  - "analyze/**/*.go"
+  - "render/**/*.go"
+alwaysApply: false
+---
+
+# LLM Interaction and Retrieval-Augmented Generation (RAG)
+
+This rule set focuses on the intelligence layer (`@analyze`) and the presentation layer (`@render`).
+
+## 1. LLM Client Integration
+
+The `@analyze` package abstracts communication with external LLM providers.
+
+- **Protocol:** All LLM communication must utilize the `github.com/modelcontextprotocol/go-sdk` for structured requests and responses, ensuring adherence to the MCP standard.
+- **Authentication Check:** Before any expensive LLM operation, the client must be verified using `client.Ping(ctx)` to ensure API keys are valid and connectivity is established.
+- **Caching:** Always check the local file cache managed by the `@cache` package before making an external API call. Use the `--no-cache` flag as the only mechanism to bypass this check.
+
+## 2. RAG and Embedding Logic
+
+The project uses RAG for context-aware analysis, relying on vector embeddings.
+
+- **Vector Indexing:** The `graph/vectors.go` component manages the vector index, which is used by the `analyze.Retriever` for semantic search.
+- **Embedding Fallback:** Be aware of the explicit fallback logic in `analyze/factory.go`: if the configured provider is Anthropic, the embedding client must be explicitly configured to use Ollama or another provider, as Anthropic may not offer native embedding endpoints. This is a known leaky abstraction that must be maintained.
+- **Retrieval:** The `analyze.Retriever.Retrieve(query)` method is the core RAG function, responsible for fetching the most semantically similar code chunks from the vector index to augment the LLM prompt.
+
+## 3. TUI Rendering Conventions
+
+The `@render` package is responsible for all terminal output.
+
+- **Styling:** Use `github.com/charmbracelet/lipgloss` for all colors, borders, and layout. Avoid raw ANSI codes.
+- **Interactive Components:** Use `github.com/charmbracelet/bubbletea` only for interactive views (e.g., the Skyline or TUI menus). Non-interactive output should be rendered directly using `lipgloss`.
+- **Machine-Readable Output:** The presence of the `--json` flag must trigger the serialization of the final data struct (e.g., `scanner.DepsProject`) to JSON, bypassing all TUI/styled rendering logic.

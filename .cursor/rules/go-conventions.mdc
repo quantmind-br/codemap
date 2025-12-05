@@ -1,0 +1,39 @@
+---
+description: Specifies Go-specific conventions, strict package dependency boundaries, and the use of the Configuration-Driven Factory Pattern.
+globs:
+  - "**/*.go"
+alwaysApply: false
+---
+
+# Go Language Conventions and Dependency Management
+
+This rule set defines standard Go practices specific to the `codemap` project, focusing on robustness and maintainability.
+
+## 1. Strict Package Dependency Boundaries
+
+Dependencies between packages must be strictly controlled to maintain low coupling.
+
+- **Rule:** Only the `@scanner` package may import `go-tree-sitter`. Only the `@render` package may import `charmbracelet/*`.
+- **Anti-Pattern:** Do not allow the `@graph` package to import `analyze` or `render`. The data flow is strictly unidirectional: `scanner` -> `graph` -> `analyze`/`render`.
+- **Configuration Isolation:** The `@config` package is the only one that should handle file I/O for YAML/ENV files (`gopkg.in/yaml.v3`, `godotenv`). Configuration is passed as a struct (`*config.Config`) to consumers.
+
+## 2. Configuration-Driven Factory Pattern
+
+The `@analyze/factory.go` package implements the Factory Pattern for LLM clients.
+
+- **Rule:** The `analyze.NewClient(cfg)` function must inspect `cfg.LLM.Provider` and dynamically instantiate the correct concrete implementation (`OpenAIClient`, `OllamaClient`, etc.) which satisfies the `analyze.Client` interface.
+- **Inversion of Control:** Consumers of LLM functionality (e.g., `main.go`) must only interact with the abstract `analyze.Client` interface, never the concrete implementations.
+
+## 3. Error Handling in CLI Modes
+
+In the `main.go` mode handlers (`runIndexMode`, `runExplainMode`, etc.), critical errors must result in immediate, informative termination.
+
+- **Pattern:** Check errors immediately and use `os.Exit(1)` after printing the error to `os.Stderr`.
+```go
+// Example from a run*Mode function in main.go
+if err != nil {
+    fmt.Fprintf(os.Stderr, "Error loading graph: %v\n", err)
+    os.Exit(1)
+}
+```
+- **Library Rule:** Library packages (`scanner`, `graph`, `analyze`) must return errors for the caller to handle; they must *not* call `os.Exit` or `log.Fatal`.

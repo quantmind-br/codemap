@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gemini-3-pro-preview": {
+      "command": "mcp",
+      "args": [
+        "add",
+        "codemap",
+        "/home/diogo/dev/codemap/codemap-mcp"
+      ]
+    }
+  }
+}

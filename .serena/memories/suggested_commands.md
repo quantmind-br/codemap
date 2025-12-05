@@ -16,7 +16,7 @@ make grammars
 make clean
 ```
 
-## Run Commands
+## Run Commands - Basic Modes
 
 ```bash
 # Basic tree view
@@ -45,6 +45,42 @@ make run SKYLINE=1 ANIMATE=1
 ./codemap --deps --json .
 ```
 
+## Run Commands - Knowledge Graph
+
+```bash
+# Build the knowledge graph index
+./codemap --index .
+./codemap --index --force .        # Force full rebuild
+
+# Query the graph
+./codemap --query --from main .              # What does main call?
+./codemap --query --to Scanner .             # What calls Scanner?
+./codemap --query --from A --to B .          # Find path from A to B
+./codemap --query --from main --depth 3 .    # Limit traversal depth
+```
+
+## Run Commands - LLM Analysis
+
+```bash
+# Generate embeddings for semantic search
+./codemap --embed .
+./codemap --embed --force .        # Force re-embedding
+
+# Explain a symbol using LLM
+./codemap --explain --symbol main .
+./codemap --explain --symbol "NewBuilder" --model gpt-4o .
+./codemap --explain --symbol main --no-cache .
+
+# Summarize a module/directory
+./codemap --summarize ./scanner
+./codemap --summarize ./graph --model claude-3-5-sonnet-20241022
+
+# Semantic search
+./codemap --search --q "parse configuration" .
+./codemap --search --q "error handling" --limit 20 .
+./codemap --search --q "database operations" --expand .
+```
+
 ## Installation Commands
 
 ```bash
@@ -64,6 +100,9 @@ make uninstall
 # Format code
 go fmt ./...
 
+# Lint code
+go vet ./...
+
 # Build and test locally
 go build -o codemap . && ./codemap .
 
@@ -74,13 +113,52 @@ go build -o codemap-mcp ./mcp/
 ./codemap --debug .
 ```
 
-## System Commands (Linux)
+## Configuration
+
+### Option 1: Using .env file (recommended)
+
+Copy `.env.example` to `.env` and configure:
 
 ```bash
-# Standard utilities available
-git, ls, cd, grep, find, cat, head, tail
+cp .env.example .env
+# Edit .env with your settings
 ```
+
+Example `.env`:
+```bash
+CODEMAP_LLM_PROVIDER=openai
+CODEMAP_LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-...
+```
+
+### Option 2: YAML config file
+
+LLM settings can also be configured in `~/.config/codemap/config.yaml`:
+
+```yaml
+llm:
+  provider: openai    # or anthropic, ollama
+  model: gpt-4o-mini
+cache:
+  enabled: true
+  ttl_days: 7
+```
+
+### Configuration Priority (highest to lowest)
+1. Shell environment variables
+2. Project `.env` file
+3. User `.env` file (`~/.config/codemap/.env`)
+4. Project config (`.codemap/config.yaml`)
+5. User config (`~/.config/codemap/config.yaml`)
+6. Default values
 
 ## Environment Variables
 
-- `CODEMAP_GRAMMAR_DIR` - Override grammar library location for --deps mode
+- `CODEMAP_LLM_PROVIDER` - LLM provider (openai/anthropic/ollama)
+- `CODEMAP_LLM_MODEL` - LLM model name
+- `OPENAI_API_KEY` - OpenAI API key
+- `OPENAI_BASE_URL` - OpenAI base URL (for Azure or compatible APIs)
+- `ANTHROPIC_API_KEY` - Anthropic API key
+- `OLLAMA_HOST` or `CODEMAP_OLLAMA_URL` - Ollama server URL
+- `CODEMAP_GRAMMAR_DIR` - Override grammar library location
+- `CODEMAP_DEBUG` - Enable debug output (1 or true)

@@ -2,7 +2,8 @@
 // Configuration is loaded from:
 // 1. ~/.config/codemap/config.yaml (user-level)
 // 2. .codemap/config.yaml (project-level override)
-// 3. Environment variables (highest priority)
+// 3. Environment variables from .env files (user-level and project-level)
+// 4. Environment variables (highest priority)
 package config
 
 import (
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,11 +24,13 @@ const (
 	ProviderOllama    Provider = "ollama"
 	ProviderOpenAI    Provider = "openai"
 	ProviderAnthropic Provider = "anthropic"
+	ProviderGemini    Provider = "gemini"
+	ProviderMock      Provider = "mock"
 )
 
 // LLMConfig holds settings for LLM integration.
 type LLMConfig struct {
-	// Provider is the LLM provider to use (ollama, openai, anthropic)
+	// Provider is the LLM provider to use (ollama, openai, anthropic, gemini)
 	Provider Provider `yaml:"provider"`
 
 	// Model is the model name/ID to use (e.g., "llama3", "gpt-4", "claude-3-sonnet")
@@ -41,6 +45,10 @@ type LLMConfig struct {
 
 	// Anthropic-specific settings
 	AnthropicAPIKey string `yaml:"anthropic_api_key"` // Can also use ANTHROPIC_API_KEY env var
+
+	// Gemini-specific settings
+	GeminiAPIKey  string `yaml:"gemini_api_key"`  // Can also use GEMINI_API_KEY env var
+	GeminiBaseURL string `yaml:"gemini_base_url"` // Default: https://generativelanguage.googleapis.com/v1beta
 
 	// Embedding settings
 	EmbeddingModel    string `yaml:"embedding_model"`    // Model for embeddings
@@ -103,10 +111,12 @@ func DefaultConfig() *Config {
 
 // Load reads configuration from standard locations and merges with defaults.
 // Priority (highest to lowest):
-// 1. Environment variables
-// 2. Project config (.codemap/config.yaml)
-// 3. User config (~/.config/codemap/config.yaml)
-// 4. Defaults
+// 1. Environment variables (shell)
+// 2. Project .env file (.env)
+// 3. User .env file (~/.config/codemap/.env)
+// 4. Project config (.codemap/config.yaml)
+// 5. User config (~/.config/codemap/config.yaml)
+// 6. Defaults
 func Load() (*Config, error) {
 	cfg := DefaultConfig()
 
@@ -127,6 +137,9 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("parsing project config %s: %w", projectConfigPath, err)
 		}
 	}
+
+	// Load .env files (user-level first, then project-level to override)
+	loadEnvFiles()
 
 	// Apply environment variable overrides
 	applyEnvOverrides(cfg)
@@ -151,6 +164,9 @@ func LoadFromPath(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing config file: %w", err)
 	}
+
+	// Load .env files
+	loadEnvFiles()
 
 	applyEnvOverrides(cfg)
 
@@ -179,6 +195,12 @@ func (c *Config) Validate() error {
 		if c.LLM.AnthropicAPIKey == "" {
 			errs = append(errs, "anthropic_api_key required for anthropic provider (or set ANTHROPIC_API_KEY env var)")
 		}
+	case ProviderGemini:
+		if c.LLM.GeminiAPIKey == "" {
+			errs = append(errs, "gemini_api_key required for gemini provider (or set GEMINI_API_KEY env var)")
+		}
+	case ProviderMock:
+		// No validation needed for mock
 	case "":
 		// Will use default
 	default:
@@ -221,6 +243,30 @@ func userConfigPath() (string, error) {
 	return filepath.Join(home, ".config", "codemap", "config.yaml"), nil
 }
 
+// loadEnvFiles loads environment variables from .env files.
+// Files are loaded in order of precedence (later files override earlier):
+// 1. User-level: ~/.config/codemap/.env
+// 2. Project-level: .env (current directory)
+//
+// Note: godotenv does NOT override existing environment variables,
+// so shell-set variables always take precedence.
+func loadEnvFiles() {
+	// Load user-level .env first (lower priority)
+	if home, err := os.UserHomeDir(); err == nil {
+		userEnvPath := filepath.Join(home, ".config", "codemap", ".env")
+		_ = godotenv.Load(userEnvPath) // Ignore errors (file may not exist)
+	}
+
+	// Check XDG_CONFIG_HOME
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		xdgEnvPath := filepath.Join(xdgConfig, "codemap", ".env")
+		_ = godotenv.Load(xdgEnvPath)
+	}
+
+	// Load project-level .env (higher priority, overrides user-level)
+	_ = godotenv.Overload(".env")
+}
+
 // applyEnvOverrides applies environment variable overrides to the config.
 func applyEnvOverrides(cfg *Config) {
 	// Provider
@@ -252,6 +298,22 @@ func applyEnvOverrides(cfg *Config) {
 	// Anthropic
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.LLM.AnthropicAPIKey = v
+	}
+
+	// Gemini
+	if v := os.Getenv("GEMINI_API_KEY"); v != "" {
+		cfg.LLM.GeminiAPIKey = v
+	}
+	if v := os.Getenv("GEMINI_BASE_URL"); v != "" {
+		cfg.LLM.GeminiBaseURL = v
+	}
+
+	// Embedding settings
+	if v := os.Getenv("CODEMAP_EMBEDDING_MODEL"); v != "" {
+		cfg.LLM.EmbeddingModel = v
+	}
+	if v := os.Getenv("CODEMAP_EMBEDDING_PROVIDER"); v != "" {
+		cfg.LLM.EmbeddingProvider = v
 	}
 
 	// Debug

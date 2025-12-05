@@ -196,14 +196,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, req *CompletionRequest) (*C
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	// Retry logic
+	// Retry logic with exponential backoff
 	var resp *http.Response
 	var lastErr error
 	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
@@ -211,26 +204,48 @@ func (c *OpenAIClient) Complete(ctx context.Context, req *CompletionRequest) (*C
 			time.Sleep(time.Duration(attempt*attempt) * time.Second)
 		}
 
-		resp, lastErr = c.httpClient.Do(httpReq)
-		if lastErr == nil {
-			// Check for rate limiting
-			if resp.StatusCode == http.StatusTooManyRequests {
-				resp.Body.Close()
-				lastErr = ErrRateLimited
-				continue
-			}
-			if resp.StatusCode == http.StatusOK {
-				break
-			}
-		}
-
-		if resp != nil {
-			resp.Body.Close()
-		}
-
+		// Check context before each attempt
 		if ctx.Err() != nil {
 			return nil, ErrTimeout
 		}
+
+		// Create new request for each attempt (body reader is consumed after each request)
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+		resp, lastErr = c.httpClient.Do(httpReq)
+		if lastErr != nil {
+			// Network error - retry
+			if ctx.Err() != nil {
+				return nil, ErrTimeout
+			}
+			continue
+		}
+
+		// Check response status
+		switch {
+		case resp.StatusCode == http.StatusOK:
+			// Success - break out of retry loop
+			lastErr = nil
+		case resp.StatusCode == http.StatusTooManyRequests:
+			// Rate limited - close body and retry
+			resp.Body.Close()
+			lastErr = ErrRateLimited
+			continue
+		case resp.StatusCode >= 500:
+			// Server error - close body and retry
+			resp.Body.Close()
+			lastErr = fmt.Errorf("server error: %d", resp.StatusCode)
+			continue
+		default:
+			// Client error (4xx) - don't retry, break to handle error with body
+			lastErr = nil
+		}
+		break
 	}
 
 	if lastErr != nil {
