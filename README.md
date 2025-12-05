@@ -1,40 +1,34 @@
-# Codemap: Code Analysis and Knowledge Graph System
+# Codebase Analysis Tool (codemap)
 
 ## Project Overview
 
-**Codemap** is a powerful Command Line Interface (CLI) application written in Go designed to transform a codebase into a structured, queryable knowledge graph. By integrating with various Large Language Models (LLMs), it enables developers to perform deep, context-aware analysis, semantic search, and natural language querying of their source code.
+The `codemap` project is a sophisticated code intelligence tool built in Go. It is designed to provide deep, structural, and semantic analysis of a codebase by combining high-performance static analysis with the reasoning capabilities of Large Language Models (LLMs).
 
-### Purpose and Main Functionality
+**Purpose and Main Functionality:**
+The core purpose of `codemap` is to transform raw source code into a queryable **Knowledge Graph**. This graph, augmented with vector embeddings, serves as the foundation for a Retrieval-Augmented Generation (RAG) pipeline, enabling AI agents and developers to ask complex questions about the codebase structure, dependencies, and functionality.
 
-The primary purpose of Codemap is to enhance code comprehension, developer onboarding, and knowledge transfer by providing an intelligent layer over the source code. It achieves this by:
+**Key Features and Capabilities:**
 
-1.  **Indexing:** Parsing source code using Tree-sitter to build a persistent, language-agnostic knowledge graph of symbols, calls, and dependencies.
-2.  **Analysis:** Leveraging LLMs (via a Retrieval-Augmented Generation, or RAG, pipeline) to explain complex symbols, summarize modules, and answer natural language questions about the code.
-3.  **Visualization:** Rendering dependency graphs and file structures directly in the terminal.
+*   **Multi-Language Static Analysis:** Uses Tree-sitter to parse various languages and extract symbols, types, and dependencies.
+*   **Knowledge Graph Persistence:** Builds and stores a persistent graph of the codebase (Nodes, Edges, Vectors) for fast, repeated querying.
+*   **LLM-Powered Insights:** Provides natural language explanations for code symbols and summaries for modules using external LLMs (OpenAI, Gemini, Anthropic, Ollama).
+*   **Semantic Search:** Supports hybrid search capabilities using vector embeddings and graph traversal.
+*   **Code Flow Tracing:** Can trace the shortest path of function calls between two symbols in the graph.
+*   **Dual Interface:** Operates as a Command Line Interface (CLI) tool for developers and as a **Model Context Protocol (MCP) Server** for AI agents.
+*   **Rich Visualization:** Offers terminal visualizations, including file trees, dependency graphs, and a code "skyline" view.
 
-### Key Features and Capabilities
+**Likely Intended Use Cases:**
 
-*   **Knowledge Graph Generation:** Creates a persistent graph index (`.codemap/graph.gob`) for fast querying.
-*   **Multi-LLM Support:** Seamless integration with OpenAI, Anthropic, Google Gemini, and Ollama (for local models).
-*   **Semantic Search:** Uses vector embeddings to perform natural language searches over the codebase.
-*   **Code Explanation:** Provides detailed, LLM-generated explanations for specific functions, types, or variables.
-*   **Dependency Visualization:** Renders interactive dependency graphs in the terminal.
-*   **Caching:** Implements a file-based cache for LLM responses to reduce API costs and improve performance.
-
-### Likely Intended Use Cases
-
-*   **Developer Onboarding:** Quickly understand the architecture and data flow of a new project.
-*   **Code Auditing:** Identify all callers or callees of a specific function or API endpoint.
-*   **Impact Analysis:** Determine which parts of the codebase are affected by changes in a specific file or symbol.
-*   **Code Comprehension:** Use natural language to ask "How does X work?" or "Where is Y implemented?".
+*   **AI Agent Tooling:** Serving as a core tool for LLM orchestrators to gain deep, structured context about a repository.
+*   **Developer Onboarding:** Quickly generating summaries and explanations for unfamiliar code modules.
+*   **Automated Documentation:** Generating up-to-date structural and dependency documentation.
+*   **Code Review Context:** Providing impact analysis for code changes (`--diff` mode).
 
 ## Table of Contents
 
 1.  [Project Overview](#project-overview)
 2.  [Architecture](#architecture)
 3.  [C4 Model Architecture](#c4-model-architecture)
-    *   [Context Diagram](#context-diagram)
-    *   [Container Diagram](#container-diagram)
 4.  [Repository Structure](#repository-structure)
 5.  [Dependencies and Integration](#dependencies-and-integration)
 6.  [API Documentation](#api-documentation)
@@ -44,232 +38,215 @@ The primary purpose of Codemap is to enhance code comprehension, developer onboa
 
 ## Architecture
 
-Codemap follows a **Layered Architecture** with characteristics of a **Hexagonal Architecture**, ensuring the core analysis logic is decoupled from external services (LLMs) and presentation logic (TUI).
+The `codemap` application follows a clear, layered architecture centered around the Retrieval-Augmented Generation (RAG) pattern.
 
-### High-level Architecture Overview
+**High-Level Architecture Overview**
+The system is structured as a pipeline: Data Acquisition -> Knowledge Layer -> Intelligence Layer -> Presentation Layer. The core state is managed by the persistent Knowledge Graph.
 
-The system operates as a pipeline:
+**Technology Stack and Frameworks**
 
-1.  **Input:** The `main` entry point receives a CLI command.
-2.  **Scanning:** The `scanner` package parses the source code using Tree-sitter.
-3.  **Data Storage:** The `graph` package builds and persists the knowledge graph and vector embeddings.
-4.  **Intelligence:** The `analyze` package uses the graph (RAG) and external LLMs to generate insights.
-5.  **Output:** The `render` package formats the results for the user.
-
-### Technology Stack and Frameworks
-
-| Category | Technology/Framework | Purpose |
+| Category | Technology | Purpose |
 | :--- | :--- | :--- |
-| **Language** | Go (Golang) | Primary development language. |
-| **Code Parsing** | Tree-sitter, `go-tree-sitter` | Generates Abstract Syntax Trees (ASTs) for deep code analysis. |
-| **TUI/Rendering** | `charmbracelet/bubbletea`, `lipgloss` | Framework for building the interactive terminal user interface. |
-| **Configuration** | `gopkg.in/yaml.v3` | Configuration file parsing. |
-| **Data Persistence** | `encoding/gob` | Binary serialization for fast graph loading/saving. |
+| **Core Language** | Go | Primary development language. |
+| **Static Analysis** | Tree-sitter | High-performance, multi-language parsing and AST generation. |
+| **Persistence** | `encoding/gob` | Efficient serialization of the Knowledge Graph to disk. |
+| **CLI/TUI** | `charmbracelet/bubbletea` | Framework for building rich, interactive terminal user interfaces. |
+| **AI Integration** | Model Context Protocol (MCP) | Standardized protocol for communication with LLM orchestrators. |
 
-### Key Design Patterns
+**Key Design Patterns**
 
-*   **Factory Pattern:** Used in the `analyze` package to instantiate the correct LLM client (OpenAI, Gemini, etc.) based on runtime configuration.
-*   **Repository Pattern:** The `graph` package acts as a repository, abstracting the persistence logic for the knowledge graph.
-*   **Adapter Pattern:** Concrete LLM client implementations act as adapters, translating the generic `analyze.Client` interface into provider-specific API calls.
+*   **Factory Pattern:** Used in the `analyze` package to instantiate the correct LLM client (OpenAI, Gemini, etc.) based on configuration, abstracting provider-specific details.
+*   **Strategy Pattern:** Different LLM providers are interchangeable strategies conforming to a common `LLMClient` interface.
+*   **Repository Pattern:** The `graph` package acts as a repository, abstracting the persistence and querying logic for the code knowledge graph.
 
-### Component Relationships
+**Component Relationships**
 
-The following diagram illustrates the primary internal dependencies and data flow between the core packages:
+The diagram below illustrates the primary data and control flow between the core internal packages.
 
 ```mermaid
 graph TD
-    subgraph Presentation Layer
-        R[render]: TUI & Visualization
+    subgraph 0. Orchestration
+        A[main: CLI Entry Point & Router]
     end
 
-    subgraph Application/Intelligence Layer
-        A[analyze]: LLM Clients, RAG, Caching
+    subgraph 1. Presentation Layer (Output)
+        R[render: Visualization & Formatting]
     end
 
-    subgraph Data Layer
-        G[graph]: Knowledge Graph Store, Embeddings
-        C[cache]: LLM Response Cache
+    subgraph 2. Intelligence Layer (LLM Orchestration)
+        F[analyze: LLM Clients, RAG, Embeddings]
     end
 
-    subgraph Infrastructure Layer
-        S[scanner]: Tree-sitter Parsing
-        CFG[config]: Configuration & Settings
+    subgraph 3. Knowledge Layer (Data Core)
+        E[graph: Knowledge Graph Store & Query]
+        D[cache: Persistence & Caching]
     end
 
-    M[main.go (CLI Entry)] --> CFG
-    M --> S
-    M --> G
-    M --> A
-    M --> R
+    subgraph 4. Data Acquisition Layer (Input)
+        C[scanner: Tree-sitter Parsing & Git]
+        B[config: Configuration]
+    end
 
-    S -- Extracts Data --> G
-    S -- Reads Settings --> CFG
+    A --> B
+    A --> C
+    A --> D
+    A --> E
+    A --> F
+    A --> R
 
-    A -- Retrieves Context --> G
-    A -- Reads Settings --> CFG
-    A -- Reads/Writes --> C
-    A -- Communicates With --> ExternalLLMs[External LLM APIs]
-
-    G -- Reads Persistence Path --> CFG
-    R -- Queries Data --> G
-
-    style M fill:#f9f,stroke:#333
-    style A fill:#ccf,stroke:#333
-    style S fill:#afa,stroke:#333
-    style G fill:#ffc,stroke:#333
+    C -- Reads Settings --> B
+    E -- Consumes DTOs --> C
+    E -- Persists Data --> D
+    F -- Loads Settings --> B
+    F -- Uses Cache --> D
+    F -- Queries Context --> E
+    R -- Consumes Data --> C
+    R -- Consumes Data --> E
 ```
 
 ## C4 Model Architecture
 
-### Context Diagram
+### Context Diagram (Level 1)
 
 <details>
-<summary>C4 Context Diagram: System and its Relationships</summary>
+<summary>C4 Context Diagram: System and External Relationships</summary>
 
 ```mermaid
+%% C4 Context Diagram
 C4Context
-    title System Context Diagram for Codemap
+    title Context Diagram for Codebase Analysis Tool
 
-    Person(user, "Developer/User", "Uses the CLI to analyze code and ask questions.")
+    Person(developer, "Developer/User", "Interacts via CLI for analysis and visualization.")
+    System(codemap, "Codebase Analysis Tool (codemap)", "Analyzes source code, builds a knowledge graph, and provides RAG-powered insights.")
+    System(llm_orchestrator, "LLM Orchestrator/Agent", "Consumes the MCP Server API for code context and analysis tools.")
+    System_Ext(external_llms, "External LLM APIs", "OpenAI, Anthropic, Gemini, etc. Used for generation and embedding.")
+    System_Ext(source_code, "Source Code Repository", "The codebase being analyzed (Go, Python, etc.).")
 
-    System(codemap, "Codemap CLI Tool", "A command-line application for code analysis, knowledge graph generation, and LLM-powered querying.")
-
-    System_Ext(openai, "OpenAI API", "Provides GPT models for analysis and embeddings.")
-    System_Ext(anthropic, "Anthropic API", "Provides Claude models for analysis.")
-    System_Ext(gemini, "Google Gemini API", "Provides Gemini models for analysis.")
-    System_Ext(ollama, "Ollama Server", "Provides local, self-hosted LLMs for analysis.")
-
-    Rel(user, codemap, "Invokes commands and receives analysis output")
-    Rel(codemap, openai, "Sends prompts and receives analysis/embeddings", "HTTPS/JSON")
-    Rel(codemap, anthropic, "Sends prompts and receives analysis", "HTTPS/JSON")
-    Rel(codemap, gemini, "Sends prompts and receives analysis", "SDK/HTTPS")
-    Rel(codemap, ollama, "Sends prompts and receives analysis/embeddings", "HTTP")
+    developer --> codemap "Uses CLI to run analysis modes"
+    llm_orchestrator --> codemap "Calls MCP Server API (stdio/IPC)"
+    codemap --> external_llms "Calls for LLM generation and embeddings (HTTP/S)"
+    codemap --> source_code "Reads and parses files (File I/O)"
 ```
 </details>
 
-### Container Diagram
+### Container Diagram (Level 2)
 
 <details>
 <summary>C4 Container Diagram: High-Level Technical Building Blocks</summary>
 
 ```mermaid
+%% C4 Container Diagram
 C4Container
-    title Container Diagram for Codemap
+    title Container Diagram for Codebase Analysis Tool
 
-    System_Boundary(codemap_cli, "Codemap CLI Application")
-        Container(cli, "CLI Entrypoint (main)", "Go Executable", "Handles command routing, configuration loading, and orchestration.")
+    System_Boundary(codemap_system, "Codebase Analysis Tool")
+        Container(cli, "CLI Application (codemap)", "Go Executable", "Handles command-line arguments, orchestrates analysis, and provides TUI output.")
+        Container(mcp_server, "MCP Server", "Go Executable (stdio)", "Exposes analysis tools via the Model Context Protocol (MCP) for AI agents.")
+        Container(knowledge_graph, "Knowledge Graph Store", "File System (.codemap/graph.gob)", "Persistent storage for the code graph (Nodes, Edges, Vectors).")
+        Container(analysis_cache, "Analysis Cache", "File System (.codemap/cache)", "Stores cached LLM responses and analysis results.")
+    System_Boundary
 
-        Container(scanner, "Code Scanner", "Go Package (tree-sitter)", "Parses source code, extracts symbols, calls, and dependencies.")
-        Container(graph, "Knowledge Graph Store", "Go Package (Gob Files)", "Manages the in-memory graph structure, persistence (.codemap/graph.gob), and vector embeddings.")
-        Container(analyze, "LLM Analysis Engine", "Go Package (LLM Clients)", "Abstracts external LLM APIs, constructs prompts, manages caching, and performs RAG.")
-        Container(render, "Output Renderer", "Go Package (Bubbletea/Lipgloss)", "Formats and visualizes results (TUI, dependency graphs, text output).")
-        Container(cache, "LLM Response Cache", "Go Package (File System)", "Stores LLM responses to prevent redundant API calls.")
+    System_Ext(external_llms, "External LLM APIs", "OpenAI, Anthropic, Gemini, Ollama")
+    System_Ext(source_code, "Source Code Repository", "Files on disk")
 
-        Rel(cli, scanner, "Invokes scanning for code structure")
-        Rel(cli, graph, "Loads/Saves/Queries the graph index")
-        Rel(cli, analyze, "Dispatches LLM-powered analysis requests")
-        Rel(cli, render, "Passes data for visualization")
+    cli --> knowledge_graph "Reads/Writes Graph Data (gob)"
+    cli --> analysis_cache "Reads/Writes Cached Results (JSON/Bytes)"
+    cli --> source_code "Scans and Parses Code"
+    cli --> external_llms "Calls LLM APIs (via analyze package)"
 
-        Rel(scanner, graph, "Feeds extracted symbols and dependencies")
-        Rel(analyze, graph, "Retrieves code context (RAG) and stores embeddings")
-        Rel(analyze, cache, "Reads/Writes LLM responses")
-        Rel(analyze, external_llms, "Communicates with external APIs", "HTTPS/SDK")
-    End_System_Boundary
+    mcp_server --> knowledge_graph "Reads/Writes Graph Data (gob)"
+    mcp_server --> analysis_cache "Reads/Writes Cached Results (JSON/Bytes)"
+    mcp_server --> source_code "Scans and Parses Code"
+    mcp_server --> external_llms "Calls LLM APIs (via analyze package)"
 
-    System_Ext(external_llms, "External LLM Providers", "OpenAI, Anthropic, Gemini, Ollama")
+    knowledge_graph --> source_code "Built from parsed code"
 ```
 </details>
 
 ## Repository Structure
 
-The repository is organized into functional packages, reflecting the layered architecture:
+The repository is organized by functional package, reflecting the layered architecture.
 
 | Directory/File | Purpose |
 | :--- | :--- |
-| `/main.go` | The application entry point and central command router. |
-| `/config` | Handles configuration loading, merging, and validation from YAML and environment variables. |
-| `/scanner` | Contains the Tree-sitter integration, AST traversal logic, and symbol extraction. |
-| `/graph` | Defines the knowledge graph data model, persistence (`.gob` serialization), and querying logic. |
-| `/analyze` | Manages all LLM interactions, including client factories, RAG retrieval, and caching. |
-| `/render` | Components for terminal visualization, including TUI elements and dependency graph rendering. |
-| `/.codemap/` | The default directory for persistent data, including the graph index, vector store, and LLM cache. |
+| `/main.go` | Application entry point, command-line argument parsing, and mode routing. |
+| `/scanner` | Code parsing, file system traversal, Git integration, and symbol extraction using Tree-sitter. |
+| `/graph` | Knowledge Graph construction, persistence, querying, and vector indexing (the RAG backend). |
+| `/analyze` | LLM orchestration, client management, embedding generation, and RAG context retrieval logic. |
+| `/render` | Output formatting and visualization for the terminal (trees, graphs, skyline). |
+| `/config` | Centralized management of application settings and LLM configuration. |
+| `/cache` | Persistent key-value store for caching expensive analysis results (LLM responses, embeddings). |
+| `/.codemap` | Default directory created by the tool to store persistent state (graph, vectors, cache). |
 
 ## Dependencies and Integration
 
-### Internal Service Dependencies
+### Internal and External Service Dependencies
 
-The core functionality is distributed across highly cohesive internal packages:
+The application relies on several external services, primarily for its AI-powered features.
 
-*   **`main`** orchestrates all other packages (`config`, `scanner`, `graph`, `analyze`, `render`).
-*   **`analyze`** depends on **`config`** (for API keys) and **`graph`** (for RAG context).
-*   **`scanner`** depends on **`config`** (for file filtering) and feeds data to **`graph`**.
-*   **`render`** depends on **`graph`** to retrieve data for visualization.
-
-### External Service Dependencies
-
-Codemap relies on external Large Language Model (LLM) APIs for its intelligence features.
-
-| Service | Integration Point | Authentication Method | Purpose |
+| Service/Integration Point | Internal Package | Protocol/Client | Purpose |
 | :--- | :--- | :--- | :--- |
-| **OpenAI API** | `analyze/openai.go` | `OPENAI_API_KEY` (Bearer Token) | General analysis, summarization, and vector embeddings. |
-| **Anthropic API** | `analyze/anthropic.go` | `ANTHROPIC_API_KEY` (Custom Header) | General analysis and summarization. |
-| **Google Gemini API** | `analyze/gemini.go` | `GEMINI_API_KEY` (SDK Initialization) | General analysis and summarization. |
-| **Ollama API** | `analyze/ollama.go` | None (Local/Self-hosted) | Local analysis and embeddings. |
+| **OpenAI API** | `analyze/openai.go` | HTTP/Go SDK | General-purpose LLM for `explain`, `summarize`, and `search`. |
+| **Google Gemini API** | `analyze/gemini.go` | HTTP/Go SDK | Alternative LLM provider integration. |
+| **Anthropic API** | `analyze/anthropic.go` | HTTP/Go SDK | Alternative LLM provider integration. |
+| **Ollama** | `analyze/ollama.go` | HTTP/Go SDK | Integration for local/self-hosted LLMs. |
+| **Model Context Protocol (MCP)** | `analyze` | `modelcontextprotocol/go-sdk` | Standardizes the RAG pipeline and context formatting for LLM calls. |
+| **Git** | `scanner/git.go` | OS Command Execution (Inferred) | Used to determine changed files (`--diff` mode) and repository root. |
 
-### Integration Pattern
+### Integration Patterns
 
-The `analyze` package uses a common `analyze.Client` interface and a **Factory Pattern** (`analyze/factory.go`) to abstract the specific LLM provider. This allows the core application logic to be provider-agnostic, enabling easy switching between models via configuration.
+*   **LLM Client Abstraction:** The `analyze` package uses a common `Client` interface and a **Factory Pattern** to abstract communication with all external LLM providers, ensuring the core RAG logic remains provider-agnostic.
+*   **Resilience:** The system implements a **caching layer** (`/cache`) to prevent redundant external API calls. For transient errors (e.g., network issues, rate limits), the `analyze` package implements **retry logic** with a maximum of **3 attempts** and an exponential backoff strategy.
 
 ## API Documentation
 
-The primary API for Codemap is its command-line interface. The following table outlines the main functional "endpoints" (commands) available to the user.
+The project exposes its analysis capabilities via the **Model Context Protocol (MCP) Server**, designed for inter-process communication with LLM orchestrators. The API version is **2.3.0**.
 
-| Command | Method | Description | Key Parameters |
-| :--- | :--- | :--- | :--- |
-| `codemap --index` | `POST` | Builds or rebuilds the internal knowledge graph index from the source code. | `[path]`, `--force` |
-| `codemap --embed` | `POST` | Generates vector embeddings for all nodes in the knowledge graph, required for semantic search. | `[path]`, `--force` |
-| `codemap --query` | `GET` | Queries the knowledge graph for dependencies, paths between symbols, or specific nodes. | `--from <symbol>`, `--to <symbol>`, `--depth <n>` |
-| `codemap --explain` | `POST` | Fetches a symbol's source code and requests a detailed, natural language explanation from the configured LLM. | `--symbol <name>`, `--model <name>`, `--no-cache` |
-| `codemap --summarize` | `POST` | Gathers code from a specified path and requests a high-level summary from the LLM. | `[path]`, `--model <name>`, `--no-cache` |
-| `codemap --search` | `POST` | Performs a semantic search over the codebase using vector embeddings and a natural language query. | `--q <query>`, `--limit <n>`, `--expand` |
-| `codemap --deps` | `GET` | Scans files and renders a dependency graph visualization. | `[path]`, `--detail-level <n>` |
+All requests are made as `CALL` methods with JSON payloads.
 
-**Authentication:** All LLM-powered commands require API keys to be set via environment variables (e.g., `OPENAI_API_KEY`, `GEMINI_API_KEY`).
+| Tool Name | Description | Key Request Parameters |
+| :--- | :--- | :--- |
+| `get_structure` | Provides a hierarchical file tree view of the codebase, including file sizes, language, and token estimates. | `path` (string, required) |
+| `get_dependencies` | Generates a dependency graph report showing external dependencies and internal import chains. | `path` (string, required), `detail` (int, optional), `mode` (string, optional) |
+| `trace_path` | Finds the shortest path of function calls connecting a source symbol to a target symbol. Requires a pre-built knowledge graph index. | `path`, `from`, `to` (strings, required), `depth` (int, optional) |
+| `explain_symbol` | Uses an LLM to generate a natural language explanation for a specific code symbol (function, type, method). | `path`, `symbol` (strings, required), `model`, `no_cache` (optional) |
+| `summarize_module` | Uses an LLM to generate a summary of a module or directory based on its contents. | `path` (string, required), `model`, `no_cache` (optional) |
+| `semantic_search` | Performs a hybrid semantic and graph-based search across the codebase. | `path` (string, required), `query` (string, required - inferred) |
+| `get_callers` | Finds all functions that call a specific symbol. | `path`, `symbol` (strings, required) |
+| `status` | Checks the server's operational status and version. | None |
+
+**Authentication & Security:**
+The MCP server does not implement user authentication. It is designed to run in a secure, sandboxed environment where access control is managed by the orchestrating agent. Authentication for external LLM services is handled internally via API keys loaded from environment variables or configuration files.
 
 ## Development Notes
 
-### Project-specific Conventions
+### Project-Specific Conventions
 
-*   **Data Persistence:** The knowledge graph and vector store are serialized using Go's built-in `encoding/gob` package for performance, resulting in binary files (`.codemap/graph.gob`, `.codemap/vectors.gob`).
-*   **Configuration:** Configuration is loaded hierarchically from defaults, YAML files (`config.yaml`), and environment variables, with environment variables taking precedence.
-*   **Error Handling:** Critical errors (e.g., graph loading failure, missing grammars) result in a descriptive message to `os.Stderr` and a non-zero exit code.
-
-### Performance Considerations
-
-*   **Caching:** A file-based cache is implemented in the `cache` package to store LLM responses, significantly reducing redundant API calls and improving perceived latency for repeated queries.
-*   **Binary Serialization:** The choice of `gob` for graph persistence ensures fast load and save times for the large, complex graph data structure.
-*   **Tree-sitter:** The use of Tree-sitter for parsing provides highly efficient, language-aware code analysis compared to regex or simple tokenization.
+*   **Dependency Passing:** The project favors explicit dependency passing (passing structs and interfaces as function arguments) over global state or heavy dependency injection frameworks, which is idiomatic Go.
+*   **Data Persistence:** Internal data structures (like the Knowledge Graph) are serialized using `encoding/gob` for performance, while external data (like cache entries) often use JSON.
+*   **Configuration:** Configuration is centralized in the `config` package and loaded once at startup, providing a consistent state for all components.
 
 ### Testing Requirements
 
-Due to the complexity of the system, testing should focus on:
+*   **Unit Testing:** Critical components like `scanner` (parsing logic), `graph` (querying and indexing), and `analyze` (LLM client interfaces) should have robust unit tests, particularly for error handling and data transformation.
+*   **Integration Testing:** The RAG pipeline (`scanner` -> `graph` -> `analyze` -> LLM) requires integration tests to ensure context retrieval is accurate and LLM clients communicate correctly with external APIs.
 
-1.  **Scanner Accuracy:** Ensuring Tree-sitter queries correctly extract symbols, calls, and dependencies for all supported languages.
-2.  **Graph Integrity:** Validating that the `graph.Builder` correctly maps scanner output to nodes and edges, and that queries return accurate results.
-3.  **LLM Client Mocking:** Testing the `analyze` package logic (prompt construction, caching, RAG retrieval) by mocking external LLM API responses.
+### Performance Considerations
+
+*   **Static Analysis:** The use of Tree-sitter with C bindings via `purego` is a deliberate choice to maximize parsing speed, which is the primary bottleneck for large codebases.
+*   **Caching:** The `cache` layer is essential for performance and cost management, preventing redundant computation and external API calls.
+*   **Graph Serialization:** Using `encoding/gob` for the graph store ensures that the knowledge base can be loaded and saved quickly, minimizing startup time for query and analysis modes.
 
 ## Known Issues and Limitations
 
-*   **CGO Dependency for Scanning:** The `scanner` package relies on C bindings (`purego`) to interface with Tree-sitter grammars. This introduces complexity for cross-platform compilation and deployment.
-*   **Missing Resilience:** The LLM clients currently lack explicit retry logic or circuit breaker patterns. Failures due to transient network issues or rate limiting are likely to result in immediate errors.
-*   **TUI Framework Lock-in:** The `render` package is tightly coupled to the `charmbracelet/bubbletea` ecosystem. Changing the output format (e.g., to a web UI) would require a complete rewrite of the rendering logic.
-*   **Cache Expiry:** While the LLM response cache supports Time-To-Live (TTL), the default configuration may result in responses never expiring, potentially leading to stale analysis results if the underlying code changes significantly.
+*   **Tree-sitter C Bindings Complexity:** The reliance on `github.com/ebitengine/purego` and manually managed C grammars introduces significant build complexity and platform-specific dependencies. This is the most fragile part of the build chain.
+*   **Tight Coupling in RAG Pipeline:** The `analyze` package is tightly coupled to the internal data structures of the `graph` package. Any significant refactoring of the graph model will require corresponding updates to the RAG retrieval logic.
+*   **LLM Client Maintenance:** The need to maintain separate client implementations for four different LLM providers (OpenAI, Anthropic, Gemini, Ollama) increases the surface area for external dependency management and API changes.
+*   **TUI Dependency Overhead:** The `charmbracelet/bubbletea` dependency, while providing a great user experience, adds significant binary size for features that are not core to the analysis logic.
 
 ## Additional Documentation
 
-The project includes extensive internal documentation and planning documents that provide deep insight into the architecture and future direction.
-
-*   [Development Plans (Strategic)](/development-docs/) - Contains strategic plans for major features like GraphRAG implementation and enhanced code analysis.
-*   [Knowledge Graph Blueprint](/development-docs/plans/01_knowledge_graph.md) - Detailed specification for the graph data model and persistence strategy.
-*   [LLM Integration Blueprint](/development-docs/plans/02_llm_integration.md) - Outlines the design for the multi-provider LLM client factory and RAG pipeline.
-*   [Tree-sitter Queries](/scanner/queries/) - The definitive source for how structural elements are extracted from each language's AST.
+*   [Development Plans]: Contains detailed architectural decisions, such as the Graph RAG implementation plan and specific LLM integration strategies.
+*   [LLM Integration Guides]: Specific documentation detailing the configuration and usage of individual LLM providers (e.g., Gemini, Claude).
+*   [Model Context Protocol (MCP) Specification]: External documentation detailing the full protocol specification for AI agent integration. (Note: This link is inferred as necessary for the MCP server).
+*   [CONTRIBUTING.md]: (Inferred) Guidelines for contributing to the codebase.

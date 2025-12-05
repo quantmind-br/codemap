@@ -1,93 +1,96 @@
 # Code Structure Analysis
 ## Architectural Overview
+The project, "codemap," is a sophisticated code intelligence tool built primarily in Go, designed to analyze source code by combining static analysis with large language model (LLM) capabilities through a Retrieval-Augmented Generation (RAG) architecture.
 
-The project, named `codemap`, is a sophisticated **Code Analysis and Knowledge Graph System** built in Go. Its architecture is primarily **Layered**, separating concerns into distinct packages for scanning, data storage, intelligence, and presentation. It also exhibits characteristics of a **Hexagonal Architecture** by isolating the core analysis logic from external services (LLMs) through clear interfaces.
+The system is organized into a clear, layered structure:
 
-The system's core function is to ingest source code, transform it into a structured knowledge graph, and leverage Large Language Models (LLMs) for deep, context-aware analysis.
+1.  **Data Acquisition Layer (`scanner`):** Responsible for parsing source code files using Tree-sitter to build Abstract Syntax Trees (ASTs) and extract raw structural data (symbols, calls, dependencies).
+2.  **Knowledge Layer (`graph`):** The core data management component. It transforms raw structural data into a persistent, queryable knowledge graph, including vector embeddings for semantic search. This layer acts as the system's central memory.
+3.  **Intelligence Layer (`analyze`):** Orchestrates the LLM interaction. It handles prompt engineering, context retrieval (RAG) from the Knowledge Layer, communication with various LLM providers (OpenAI, Gemini, Anthropic), and caching.
+4.  **Presentation Layer (`render`):** Formats and visualizes the analysis results, providing output in various forms like dependency graphs, code structure trees, or structured API responses.
 
-**Key Architectural Layers:**
-
-1.  **Infrastructure Layer (`/scanner`):** Responsible for parsing source code using Tree-sitter grammars, generating an Abstract Syntax Tree (AST), and extracting raw structural data (symbols, calls, dependencies).
-2.  **Data Layer (`/graph`, `/cache`):** Manages the persistence and retrieval of the extracted data, forming a knowledge graph and associated vector embeddings for semantic search.
-3.  **Application/Intelligence Layer (`/analyze`):** Contains the business logic for interacting with external LLM services, managing prompts, generating embeddings, and performing Retrieval-Augmented Generation (RAG).
-4.  **Presentation Layer (`/render`):** Handles the visualization and formatting of the analysis results, such as dependency graphs and file trees.
+This architecture promotes modularity, allowing the static analysis engine, the knowledge graph, and the LLM integration to evolve independently.
 
 ## Core Components
 
-| Component | Package | Purpose & Responsibility |
+| Component | Directory | Responsibility |
 | :--- | :--- | :--- |
-| **Code Scanner** | `/scanner` | The primary data ingestion component. It orchestrates the use of language-specific Tree-sitter parsers to perform deep syntactic analysis and extract structural metadata like function calls, type definitions, and dependencies. |
-| **Knowledge Graph Store** | `/graph` | The central data repository. It defines the structure for the code graph (nodes, edges, properties) and manages the storage (`store.go`) and querying (`query.go`) of this data, including vector embeddings (`vectors.go`). |
-| **LLM Analysis Engine** | `/analyze` | Abstracts all interactions with external AI services. It includes client implementations for various providers (OpenAI, Gemini, Anthropic) and manages the RAG pipeline via the `retriever.go` component. |
-| **Configuration** | `/config` | Manages application-wide settings, environment variables, and command-line parameters, ensuring all components are initialized with the correct operational context. |
-| **Output Renderer** | `/render` | Responsible for transforming complex data structures (like the knowledge graph) into human-readable or machine-consumable formats, including visual representations of dependency graphs (`depgraph.go`) and file structures (`tree.go`). |
+| **Scanner** | `/scanner` | Performs multi-language static analysis using Tree-sitter. Extracts symbols, function calls, dependencies, and types from source files. |
+| **Graph Store** | `/graph` | Manages the code knowledge graph. Handles graph construction, persistence (`store.go`), querying, and vector indexing (`vectors.go`) for semantic retrieval. |
+| **Analysis Engine** | `/analyze` | The LLM orchestration layer. Manages API clients for various LLMs, handles token counting, embedding generation, and implements the core retrieval logic. |
+| **Configuration** | `/config` | Centralized management of application settings, including LLM provider selection, API keys, and operational parameters. |
+| **Caching** | `/cache` | Provides a persistent key-value store to cache expensive results, such as LLM responses and generated embeddings, optimizing performance and cost. |
+| **Renderer** | `/render` | Responsible for output formatting and visualization, including generating dependency graphs (`depgraph.go`) and structural views (`tree.go`, `skyline.go`). |
 
 ## Service Definitions
 
-1.  **`analyze.Client` Service:**
-    *   **Definition:** An interface (implemented by `anthropic.go`, `gemini.go`, `openai.go`, `ollama.go`) that standardizes communication with different LLM providers.
-    *   **Responsibility:** Sending prompts, receiving analysis results, and handling provider-specific authentication and rate limiting.
-2.  **`analyze.Retriever` Service:**
-    *   **Definition:** A service that bridges the LLM analysis with the Knowledge Graph.
-    *   **Responsibility:** Performing vector similarity searches against the graph's embeddings to retrieve relevant code context (source chunks) that are then injected into the LLM prompt.
-3.  **`graph.Builder` Service:**
-    *   **Definition:** The component responsible for constructing the graph data model.
-    *   **Responsibility:** Taking the raw structural data from the `/scanner` package and mapping it into the defined graph schema (nodes and relationships).
-4.  **`scanner.Walker` Service:**
-    *   **Definition:** The core traversal logic for the AST.
-    *   **Responsibility:** Iterating over the Tree-sitter AST nodes and applying language-specific queries (`scanner/queries/*.scm`) to identify and extract symbols, calls, and dependencies.
+*   **LLM Client Service:** A set of concrete implementations (`anthropic.go`, `gemini.go`, `openai.go`, `ollama.go`) that adhere to a common interface (`client.go`). Each implementation handles the specific API communication, request formatting, and response parsing for its respective LLM provider.
+*   **Retriever Service:** Defined in `/analyze/retriever.go`. This service implements the core RAG functionality. It takes a user query, uses the embedding service to vectorize it, queries the Graph Store's vector index for relevant code context, and prepares the final context for the LLM prompt.
+*   **Grammar Management Service:** Implied by the `/scanner/.grammar-build` directory and `scanner/grammar.go`. This service manages the compilation and loading of Tree-sitter language parsers, ensuring the Scanner can process various languages.
+*   **Graph Persistence Service:** Defined in `/graph/store.go`. Handles the serialization and deserialization of the entire code graph to and from disk (using `.gob` files), ensuring state persistence between runs.
 
 ## Interface Contracts
 
-The use of interfaces is crucial for maintaining flexibility, particularly in the `/analyze` package.
+The architecture relies on interfaces to maintain separation of concerns, particularly in the LLM and data layers.
 
-1.  **`analyze.Client` Interface (in `analyze/client.go`):**
-    *   **Contract:** Defines methods for core LLM operations, such as `GenerateResponse(prompt string, context []Source) string` and `GetTokenCount(text string) int`. This allows the application to swap LLM providers seamlessly.
-2.  **`graph.Store` Interface (in `graph/store.go`):**
-    *   **Contract:** Defines methods for data persistence, such as `Load()` and `Save()`, abstracting the serialization format (which appears to be `gob`).
-3.  **`scanner.Grammar` Interface (in `scanner/grammar.go`):**
-    *   **Contract:** Defines methods for loading and accessing the compiled Tree-sitter parsers for different languages, ensuring the scanner logic is decoupled from the specifics of each language's grammar.
+*   **`LLMClient` (inferred from `/analyze/client.go` and `mock.go`):**
+    *   Contract for sending prompts to an LLM and receiving a response.
+    *   Key methods: `Generate(prompt string) (string, error)`, `GetTokenCount(text string) (int, error)`.
+*   **`LLMFactory` (inferred from `/analyze/factory.go`):**
+    *   Contract for instantiating specific LLM clients based on configuration.
+    *   Key method: `NewClient(provider string, config *Config) (LLMClient, error)`.
+*   **`Embedder` (inferred from `/analyze/embed.go`):**
+    *   Contract for generating vector embeddings for text chunks.
+    *   Key method: `CreateEmbedding(text string) ([]float32, error)`.
+*   **`GraphStore` (inferred from `/graph/store.go`):**
+    *   Contract for managing the persistent graph data.
+    *   Key methods: `Load() (*Graph, error)`, `Save(*Graph) error`, `Query(q *Query) (*Results, error)`.
 
 ## Design Patterns Identified
 
-*   **Factory Pattern:** Explicitly used in `analyze/factory.go` to instantiate the correct `analyze.Client` implementation (e.g., `NewOpenAIClient`, `NewGeminiClient`) based on configuration, adhering to the principle of dependency inversion.
-*   **Repository Pattern:** The `/graph` package, particularly `store.go`, acts as a repository, abstracting the data access logic for the knowledge graph from the business logic in `/analyze`.
-*   **Adapter Pattern:** The concrete LLM client implementations (e.g., `anthropic.go`) act as adapters, translating the generic `analyze.Client` interface calls into the specific API requests required by the external LLM service.
-*   **Strategy Pattern:** The different LLM clients represent different strategies for fulfilling the analysis task, selectable at runtime via the Factory.
+1.  **Factory Pattern:** Explicitly used in the `/analyze` package (`factory.go`) to decouple the application from concrete LLM client implementations. This allows easy switching or addition of new LLM providers.
+2.  **Strategy Pattern:** Applied to the LLM interaction. Different LLM providers (OpenAI, Gemini, etc.) are interchangeable strategies that conform to the `LLMClient` interface.
+3.  **Repository Pattern:** The `/graph` package acts as a repository for the code knowledge. It abstracts the complex data structure (the graph) and its persistence details from the consuming analysis logic.
+4.  **Model-View-Controller (MVC) / Layered Architecture:** The structure loosely follows a layered pattern:
+    *   **Model:** The `/graph` package (data and business logic).
+    *   **Controller:** The `/analyze` package (orchestration and external service calls).
+    *   **View:** The `/render` package (presentation logic).
 
 ## Component Relationships
 
 The system operates as a pipeline:
 
-1.  **Configuration Dependency:** `/main.go` and `/mcp/main.go` depend on `/config` for initialization parameters.
-2.  **Data Flow (Scanning to Graph):** `/scanner` (Producer) -> `/graph/builder.go` (Consumer). The scanner generates the raw data structure which the graph builder processes.
-3.  **Data Flow (Graph to Analysis):** `/analyze/retriever.go` depends on `/graph/vectors.go` and `/graph/query.go` to fetch context for LLM prompts.
-4.  **Control Flow (Analysis):** `/analyze` depends on external LLM APIs (via the `Client` interface) and uses `/analyze/tokens.go` for cost management.
-5.  **Output Flow:** `/render` depends on `/graph/query.go` to retrieve the structural data needed for visualization (e.g., dependency maps).
-6.  **Infrastructure Dependency:** `/scanner` is heavily dependent on the pre-built Tree-sitter grammars located in the extensive `/.grammar-build` directory.
+1.  **Initialization:** `main.go` loads settings from `/config` and initializes the `Scanner` and `Graph Store`.
+2.  **Data Ingestion:** The `Scanner` uses its language grammars and walkers to process source files. The extracted structural data is fed to the `Graph Builder` (`/graph/builder.go`).
+3.  **Knowledge Base Creation:** The `Graph Builder` constructs the knowledge graph, and the `Embedder` (`/analyze/embed.go`) generates vectors for graph nodes, which are stored by the `Graph Store`.
+4.  **Analysis Execution:** The `Analysis Engine` (`/analyze`) receives a task. It uses the `Retriever` to query the `Graph Store` (using vector search) to gather relevant code context.
+5.  **LLM Interaction:** The `Analysis Engine` uses the `LLMClient` (created by the `LLMFactory`) to send the prompt and context to the external LLM, caching the result via `/cache`.
+6.  **Output:** The final analysis result is passed to the `Renderer` for display.
 
 ## Key Methods & Functions
 
-| Component | File | Key Function/Method (Inferred) | Responsibility |
-| :--- | :--- | :--- | :--- |
-| **Entry Point** | `main.go` | `main()` | Initializes configuration, sets up the scanner and graph, and executes the primary analysis workflow. |
-| **Scanning** | `scanner/walker.go` | `Walk(sourceCode, language)` | Initiates the AST traversal for a given file and language, driving the data extraction process. |
-| **Graphing** | `graph/vectors.go` | `Embed(data)` | Calculates and stores the vector embedding for a piece of code or structural element, enabling semantic search. |
-| **Analysis** | `analyze/retriever.go` | `Search(query)` | Executes a vector search to find the most semantically relevant code snippets from the knowledge graph. |
-| **Analysis** | `analyze/client.go` | `CallLLM(prompt, model)` | The core method for sending a request to an external LLM and handling the response. |
-| **Rendering** | `render/depgraph.go` | `Draw(graph)` | Generates a visual representation of the component dependencies stored in the knowledge graph. |
+| Method/Function (Inferred) | Location | Purpose |
+| :--- | :--- | :--- |
+| `main.main()` | `/main.go` | Application entry point; handles command-line arguments and orchestrates the entire analysis workflow. |
+| `scanner.Walk()` | `/scanner/walker.go` | Recursively traverses the AST of a file, applying Tree-sitter queries to extract structural elements (symbols, calls). |
+| `graph.BuildGraph()` | `/graph/builder.go` | The core logic for transforming raw scanner output into a structured, interconnected knowledge graph. |
+| `analyze.RetrieveContext()` | `/analyze/retriever.go` | Implements the RAG retrieval step: vectorizes the query and fetches the most semantically relevant code nodes from the graph. |
+| `analyze.CreateEmbedding()` | `/analyze/embed.go` | Calls the embedding model API to convert text (code snippets, documentation) into high-dimensional vectors. |
+| `client.Generate()` | `/analyze/client.go` | Sends the final, context-augmented prompt to the selected LLM provider for generation. |
+| `render.RenderDepGraph()` | `/render/depgraph.go` | Visualizes the dependency relationships extracted from the graph, likely for TUI or graphical output. |
 
-## Available Documentation Include document paths and evaluate documentation quality.
+## Available Documentation
 
-The project is exceptionally well-documented, featuring both standard project documentation and extensive internal planning/analysis documents, suggesting a high degree of architectural foresight and transparency.
+The repository is well-documented with internal planning and existing analysis reports, which are highly valuable for understanding the project's intent and current state.
 
-| Document Path | Evaluation & Content |
-| :--- | :--- |
-| `/.ai/docs/` | **High Quality (Structured Analysis):** Contains five detailed analysis documents (`api_analysis.md`, `data_flow_analysis.md`, `dependency_analysis.md`, `request_flow_analysis.md`, `structure_analysis.md`). These documents provide a deep, pre-existing understanding of the system's internal mechanics and relationships, which is invaluable for any developer or AI agent. |
-| `/development-docs/` | **High Quality (Strategic Planning):** Contains detailed plans for major feature implementations (e.g., `0001-enhanced-code-analysis-plan.md`, `0003-graphrag-implementation-plan.md`). This documentation explains the *intent* and *evolution* of the codebase, covering topics like token heuristics, symbol search, and GraphRAG implementation. |
-| `/development-docs/plans/` | **High Quality (Feature Blueprints):** Specific plans for core features like `01_knowledge_graph.md`, `02_llm_integration.md`, and `03_hybrid_retrieval.md`. These serve as architectural blueprints for the system's most critical components. |
-| `/.serena/memories/` | **Contextual (AI-Specific):** Contains internal notes (`project_overview.md`, `mcp_integration.md`) used by an AI assistant (Serena). Useful for understanding the project's high-level goals and specific integration points. |
-| `/` (Root) | **Standard Project Docs:** Includes `README.md`, `CONTRIBUTING.md`, and specific LLM notes (`CLAUDE.md`, `GEMINI.md`). These cover setup, contribution guidelines, and basic usage. |
-| `/scanner/queries/` | **Technical (Implementation Detail):** Contains Tree-sitter query files (`*.scm`). These are the direct specification of *what* structural elements are extracted from each supported language's AST. |
+| Document Path | Purpose | Quality Evaluation |
+| :--- | :--- | :--- |
+| `/.ai/docs/api_analysis.md` | Analysis of external API usage, likely focusing on LLM and embedding service endpoints. | High. Provides concrete details on external dependencies. |
+| `/.ai/docs/data_flow_analysis.md` | Traces the movement of data through the system (e.g., file content -> AST -> Graph Node -> Vector -> LLM). | High. Essential for understanding the pipeline execution. |
+| `/.ai/docs/structure_analysis.md` | Previous structural analysis of the codebase. | High. Useful for validating and comparing against the current architectural state. |
+| `/development-docs/0003-graphrag-implementation-plan.md` | Detailed plan for implementing the Graph RAG architecture. | Excellent. Explicitly confirms the core architectural pattern and goals of the system. |
+| `/development-docs/0004-gemini-integration-plan.md` | Plan for integrating the Gemini LLM. | Excellent. Confirms the use of the Factory/Strategy pattern for LLM clients. |
+| `/.serena/memories/project_overview.md` | High-level summary of the project's purpose and components. | Moderate. Provides quick context for new developers or AI agents. |
+| `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` | Documentation on specific LLM integrations and agent capabilities. | High. Details the functional capabilities of the Intelligence Layer. |
 
-**Overall Documentation Quality:** Excellent. The presence of both strategic planning documents and detailed, structured analysis reports (in `/.ai/docs/`) provides a comprehensive view of the project's architecture, history, and current state.
+The documentation quality is generally high, with the development plans being particularly insightful as they articulate the "why" behind the current component structure (e.g., the commitment to a RAG-based knowledge graph).

@@ -11,13 +11,13 @@ alwaysApply: false
 
 The `@analyze` package is responsible for efficient and context-aware interaction with external LLMs, focusing on cost reduction and retrieval accuracy.
 
-## 1. Caching and Token Management
+## 1. Caching and Resilience
 
-All LLM API calls must prioritize cost reduction through caching and token limits.
+All LLM API calls must prioritize cost reduction and stability.
 
 - **Caching Rule:** Before executing any external LLM API request (e.g., in `analyze/client.go`), the `@cache` package must be checked for a pre-existing response. The cache key should be a hash of the prompt and model configuration.
 - **Bypass:** The cache check is only bypassed if the `--no-cache` flag is explicitly set in the configuration.
-- **Token Limits:** Use the utilities in `@analyze/tokens.go` to calculate prompt size and ensure the total context (prompt + retrieved RAG chunks) does not exceed the configured `MaxTokens` limit for the selected model.
+- **Retry Logic:** All external API clients must implement a retry mechanism for transient errors (e.g., network issues, rate limits) with a maximum of **3 attempts** and an exponential backoff strategy (1s, 2s, 4s delays).
 
 ## 2. Retrieval-Augmented Generation (RAG)
 
@@ -25,10 +25,10 @@ The RAG pipeline is managed by the `analyze.Retriever` and relies on the vector 
 
 - **Retrieval Flow:** The `analyze.Retriever.Search(query)` method must first query the `graph/vectors.go` component (the VectorStore) to find semantically relevant code snippets (`analyze.Source`).
 - **Prompt Augmentation:** The retrieved `analyze.Source` chunks must be injected into the LLM prompt template (from `@analyze/prompts.go`) to provide context for the analysis (`--explain`, `--summarize`).
+- **Protocol:** All LLM communication must utilize the `github.com/modelcontextprotocol/go-sdk` for structured requests and responses.
 
 ## 3. Embedding Client Fallback (Anthropic Exception)
 
 Due to provider limitations, a specific fallback logic is required for embedding generation.
 
-- **Rule:** If the primary LLM provider is configured as Anthropic, the embedding client must *not* use the Anthropic API. Instead, the `analyze/factory.go` must explicitly instantiate an embedding client using a different provider (e.g., Ollama or OpenAI) as defined in the configuration. This is a critical, known leaky abstraction.
-- **Vector Store:** The `graph/vectors.go` component is responsible for storing the resulting `[]float32` embeddings, mapping them to the deterministic Node IDs from the `graph.CodeGraph`.
+- **Critical Rule:** If the primary LLM provider is configured as Anthropic, the embedding client must *not* use the Anthropic API. Instead, the `analyze/factory.go` must explicitly instantiate an embedding client using a different provider (e.g., Ollama or OpenAI) as defined in the configuration. This is a critical, known leaky abstraction that must be maintained.

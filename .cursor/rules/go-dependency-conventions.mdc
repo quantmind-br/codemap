@@ -9,7 +9,7 @@ alwaysApply: false
 
 This project enforces strict package boundaries and specific error handling patterns to maintain a clean, layered architecture.
 
-## 1. Strict Package Import Rules
+## 1. Strict Package Import Rules (Isolation)
 
 To maintain low coupling, external dependencies must be isolated to their respective packages.
 
@@ -19,11 +19,11 @@ To maintain low coupling, external dependencies must be isolated to their respec
 
 ## 2. The analyze.Client Factory Pattern
 
-The `analyze` package uses a Factory Pattern to manage LLM providers.
+The `@analyze` package uses a Factory Pattern (`analyze/factory.go`) to manage LLM providers.
 
 - **Rule:** All code outside of `@analyze/factory.go` must interact with LLMs solely through the `analyze.Client` interface.
 - **Instantiation:** Use `analyze.NewClient(cfg)` to instantiate the client based on `cfg.LLM.Provider`. Do not directly instantiate concrete clients like `analyze.OpenAIClient{}`.
-- **Adapter Pattern:** Concrete client files (e.g., `@analyze/anthropic.go`) act as adapters, translating the generic `analyze.Client` interface into provider-specific API calls.
+- **Adapter Pattern:** Concrete client files (e.g., `@analyze/anthropic.go`, `@analyze/gemini.go`) act as adapters, translating the generic `analyze.Client` interface into provider-specific API calls.
 
 ## 3. Error Handling and Termination
 
@@ -34,7 +34,7 @@ Error handling differs between the application entry point (`main.go`) and libra
     - **Pattern:**
 ```go
 // Example from main.go run*Mode function
-if err := graph.LoadBinary(root); err != nil {
+if err := graphStore.Load(); err != nil {
     fmt.Fprintf(os.Stderr, "Fatal: Failed to load graph index. Run 'codemap --index'. Error: %v\n", err)
     os.Exit(1)
 }
