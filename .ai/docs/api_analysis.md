@@ -1,240 +1,138 @@
-This project, **codemap**, is a **Command Line Interface (CLI) tool** written in **Go**. It does not expose a traditional HTTP API (like REST or GraphQL). Instead, its "API" surface is defined by its command-line arguments and its machine-readable **JSON output format**, which is designed for programmatic consumption by other tools (like a Python renderer or an LLM context builder).
+The project at `.` is a **Command Line Interface (CLI) tool** written in **Go (Golang)**. Its primary function is to analyze, visualize, and generate context for codebases, with a strong focus on integration with Large Language Models (LLMs).
 
-The core functionality is code analysis, dependency mapping, and visualization of a codebase.
+The project **does not expose a traditional HTTP/REST API**. The primary interface for developers is the command line tool itself, which is documented below under "APIs Served by This Project" (referring to the CLI commands).
+
+The project **consumes** several external APIs, primarily for its LLM-powered features.
 
 # API Documentation
 
 ## APIs Served by This Project
 
-The primary API is the CLI interface, which, when invoked with the `--json` flag, outputs a structured JSON object to standard output (stdout). This JSON output serves as the machine-readable contract.
+Since this is a CLI application, the "API" consists of the command-line interface and its flags. The tool's main entry point is `main.go`, which uses the standard `flag` package for command parsing.
 
-### Endpoints
+### Endpoints (CLI Commands)
 
-The "endpoints" are the different operational modes of the `codemap` CLI tool.
-
-#### 1. Basic Tree/Skyline View
-
-This mode scans the file system and outputs a list of files, optionally with size and diff information.
-
-| Attribute | Detail |
-| :--- | :--- |
-| **Method** | CLI Execution |
-| **Path** | `codemap [path]` |
-| **Description** | Scans the directory and outputs file information for visualization (tree or skyline). |
-| **Authentication** | None (Relies on local file system permissions). |
-
-**Request**
-
-| Parameter | Location | Type | Description |
-| :--- | :--- | :--- | :--- |
-| `[path]` | Argument | `string` | The root directory to scan (defaults to `.`). |
-| `--skyline` | Flag | `bool` | Enables the city skyline visualization mode. |
-| `--animate` | Flag | `bool` | Enables animation (only with `--skyline`). |
-| `--diff` | Flag | `bool` | Only includes files changed relative to the reference branch. |
-| `--ref` | Flag | `string` | The branch/ref to compare against (default: `main`). |
-| `--json` | Flag | `bool` | **Required for API consumption.** Outputs the result as JSON to stdout. |
-
-**Response (Success Format: `scanner.Project` JSON)**
-
-| Field | Type | Description |
+| Method | Path | Description |
 | :--- | :--- | :--- |
-| `root` | `string` | Absolute path of the project root. |
-| `mode` | `string` | The operational mode (`tree` or `skyline`). |
-| `animate` | `bool` | Whether animation is enabled. |
-| `files` | `array<FileInfo>` | List of files found in the project. |
-| `diff_ref` | `string` | The git reference used for diffing (if `--diff` was used). |
-| `impact` | `array<ImpactInfo>` | Analysis of potential impact for changed files (if `--diff` was used). |
+| `codemap [path]` | `(default)` | Generates a file tree view with token estimates and file sizes. |
+| `codemap --deps [path]` | `deps` | Generates a dependency flow map (functions, types, and imports). |
+| `codemap --skyline [path]` | `skyline` | Generates a city skyline visualization of the codebase. |
+| `codemap --diff [path]` | `diff` | Shows only files changed compared to a specified Git reference. |
+| `codemap --index [path]` | `index` | Builds the internal knowledge graph index (`.codemap/graph.gob`). |
+| `codemap --query [path]` | `query` | Queries the knowledge graph for symbol relationships. |
+| `codemap --explain [path]` | `explain` | Uses an LLM to explain a specific symbol. |
+| `codemap --summarize [path]` | `summarize` | Uses an LLM to summarize a module or directory. |
+| `codemap --search [path]` | `search` | Performs semantic search on the codebase using natural language. |
+| `codemap --embed [path]` | `embed` | Generates vector embeddings for the knowledge graph. |
 
-**`FileInfo` Object Structure:**
+#### Endpoint Details
 
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `path` | `string` | File path relative to the project root. |
-| `size` | `int64` | File size in bytes. |
-| `ext` | `string` | File extension. |
-| `tokens` | `int` | Estimated token count for the file. |
-| `is_new` | `bool` | True if the file is newly added in the diff. |
-| `added` | `int` | Lines added in the diff. |
-| `removed` | `int` | Lines removed in the diff. |
+**1. `codemap --deps` (Dependency Graph Mode)**
 
-**Example (JSON Output):**
+*   **Method and Path:** `codemap --deps [path]`
+*   **Description:** Scans the codebase using Tree-sitter grammars to build a dependency graph of functions, types, and imports.
+*   **Request:**
+    *   **Params:**
+        *   `--detail <level>` (int): Detail level for symbols (0=names, 1=signatures, 2=full).
+        *   `--api` (bool): If true, filters the output to show only the public API surface (compact view).
+        *   `--json` (bool): If true, outputs the result as JSON.
+*   **Response (Success):**
+    *   **Format (Default):** Rendered dependency graph in the terminal.
+    *   **Format (`--json`):** A JSON object of type `scanner.DepsProject` containing `Root`, `Mode`, `Files` (list of `scanner.FileAnalysis`), `ExternalDeps`, `DiffRef`, and `DetailLevel`.
+*   **Authentication:** None (local file system access).
 
-```json
-{
-  "root": ".",
-  "mode": "tree",
-  "animate": false,
-  "files": [
-    {
-      "path": "main.go",
-      "size": 3500,
-      "ext": ".go",
-      "tokens": 1000
-    },
-    // ... more files
-  ],
-  "diff_ref": "",
-  "impact": null
-}
-```
+**2. `codemap --index` (Knowledge Graph Indexing)**
 
----
+*   **Method and Path:** `codemap --index [path]`
+*   **Description:** Parses the entire codebase to build a serialized knowledge graph (`graph.CodeGraph`) stored at `.codemap/graph.gob`.
+*   **Request:**
+    *   **Params:**
+        *   `--force` (bool): Forces a full rebuild, bypassing incremental update checks.
+        *   `--output <path>` (string): Custom path for the graph file.
+        *   `--json` (bool): Outputs indexing status as JSON.
+*   **Response (Success):**
+    *   **Format (Default):** Console output confirming index status (up-to-date, incremental update, or full rebuild) and statistics (nodes, edges).
+    *   **Format (`--json`):** A JSON object with `status`, `path`, `nodes`, `edges`, and `indexed_at`.
+*   **Authentication:** None.
 
-#### 2. Dependency Graph View
+**3. `codemap --query` (Knowledge Graph Query)**
 
-This mode performs deep code analysis using tree-sitter grammars to extract functions, types, and imports, mapping the project's internal structure and external dependencies.
+*   **Method and Path:** `codemap --query [path]`
+*   **Description:** Traverses the knowledge graph to find relationships between symbols.
+*   **Request:**
+    *   **Params:**
+        *   `--from <symbol>` (string): Starting symbol for the trace (outgoing edges).
+        *   `--to <symbol>` (string): Target symbol for pathfinding (incoming edges).
+        *   `--depth <n>` (int): Maximum traversal depth (default: 5).
+        *   `--json` (bool): Outputs results as JSON.
+*   **Response (Success):**
+    *   **Format (Default):** Rendered graph traversal path in the terminal.
+    *   **Format (`--json`):** A JSON object representing the query results (e.g., list of paths/nodes).
+*   **Authentication:** None.
 
-| Attribute | Detail |
-| :--- | :--- |
-| **Method** | CLI Execution |
-| **Path** | `codemap --deps [path]` |
-| **Description** | Scans the code to build a dependency graph (functions, types, imports). |
-| **Authentication** | None (Relies on local file system permissions). |
+**4. `codemap --explain` (LLM Symbol Explanation)**
 
-**Request**
-
-| Parameter | Location | Type | Description |
-| :--- | :--- | :--- | :--- |
-| `[path]` | Argument | `string` | The root directory to scan (defaults to `.`). |
-| `--deps` | Flag | `bool` | **Required.** Enables dependency graph mode. |
-| `--detail` | Flag | `int` | Level of detail for extracted symbols: `0` (names only), `1` (names + signatures), `2` (signatures + type fields). |
-| `--api` | Flag | `bool` | Compact view showing only public API surface (only for human-readable output). |
-| `--diff` | Flag | `bool` | Only analyzes files changed relative to the reference branch. |
-| `--ref` | Flag | `string` | The branch/ref to compare against (default: `main`). |
-| `--json` | Flag | `bool` | **Required for API consumption.** Outputs the result as JSON to stdout. |
-
-**Response (Success Format: `scanner.DepsProject` JSON)**
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `root` | `string` | Absolute path of the project root. |
-| `mode` | `string` | The operational mode (`deps`). |
-| `files` | `array<FileAnalysis>` | Detailed analysis for each scanned file. |
-| `external_deps` | `map<string, array<string>>` | Map of external dependencies (e.g., Go modules, Python packages) and the files that import them. |
-| `diff_ref` | `string` | The git reference used for diffing (if `--diff` was used). |
-| `detail_level` | `int` | The detail level used for the analysis (0, 1, or 2). |
-
-**`FileAnalysis` Object Structure:**
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `path` | `string` | File path relative to the project root. |
-| `language` | `string` | Detected programming language (e.g., `go`, `python`). |
-| `functions` | `array<FuncInfo>` | List of functions and methods defined in the file. |
-| `types` | `array<TypeInfo>` | List of type definitions (structs, classes, interfaces). |
-| `imports` | `array<string>` | List of imported modules/packages. |
-
-**`FuncInfo` Object Structure:**
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `name` | `string` | Function/method name. |
-| `signature` | `string` | Full function signature (if `detail_level >= 1`). |
-| `receiver` | `string` | Receiver type for methods (e.g., `(*Project)`). |
-| `exported` | `bool` | True if the symbol is publicly visible (based on language rules). |
-| `line` | `int` | Line number of the definition. |
-
-**`TypeInfo` Object Structure:**
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `name` | `string` | Type name. |
-| `kind` | `TypeKind` | Category of the type (`struct`, `class`, `interface`, etc.). |
-| `fields` | `array<string>` | Field names (if `detail_level = 2`). |
-| `methods` | `array<string>` | Method names associated with the type. |
-| `exported` | `bool` | True if the type is publicly visible. |
-| `line` | `int` | Line number of the definition. |
-
-**Example (JSON Output):**
-
-```json
-{
-  "root": ".",
-  "mode": "deps",
-  "files": [
-    {
-      "path": "main.go",
-      "language": "go",
-      "functions": [
-        {
-          "name": "main",
-          "signature": "func main()",
-          "exported": false,
-          "line": 19
-        },
-        {
-          "name": "runDepsMode",
-          "signature": "func runDepsMode(absRoot, root string, gitignore *ignore.GitIgnore, jsonMode bool, diffRef string, changedFiles map[string]bool, detailLevel int, apiMode bool)",
-          "exported": false,
-          "line": 137
-        }
-      ],
-      "types": [],
-      "imports": [
-        "encoding/json",
-        "flag",
-        "fmt",
-        "os",
-        "path/filepath",
-        "codemap/render",
-        "codemap/scanner",
-        "github.com/sabhiram/go-gitignore"
-      ]
-    }
-  ],
-  "external_deps": {
-    "github.com/sabhiram/go-gitignore": [
-      "main.go"
-    ]
-  },
-  "detail_level": 1
-}
-```
+*   **Method and Path:** `codemap --explain [path]`
+*   **Description:** Uses a configured LLM to generate an explanation for a specific code symbol.
+*   **Request:**
+    *   **Params:**
+        *   `--symbol <name>` (string, **required**): The name of the symbol to explain.
+        *   `--model <name>` (string): Overrides the configured LLM model.
+        *   `--no-cache` (bool): Bypasses the local cache for the LLM request.
+        *   `--json` (bool): Outputs the result as JSON.
+*   **Response (Success):**
+    *   **Format (Default):** Markdown-formatted explanation from the LLM.
+    *   **Format (`--json`):** A JSON object containing the explanation text.
+*   **Authentication:** Requires configuration of API keys for external LLM services (see **External API Dependencies**).
 
 ### Authentication & Security
 
-Since `codemap` is a local CLI tool, it does not implement traditional network-based authentication.
-
-*   **Authentication:** None. Execution is authorized by the user's shell environment and file system permissions.
-*   **Security:** The tool operates entirely on the local file system. Security relies on the operating system's access control mechanisms. It reads code files and executes the `git` command-line tool.
+*   **Authentication:** The CLI tool itself requires no authentication as it operates on the local file system.
+*   **Security:** Security considerations are focused on the **consumed external APIs**. API keys for services like OpenAI and Anthropic must be configured securely, typically via environment variables or a local configuration file (`config.go` suggests a configuration mechanism). The tool uses a local cache (`codemap/cache`) to reduce repeated external API calls.
 
 ### Rate Limiting & Constraints
 
-*   **Rate Limiting:** Not applicable.
-*   **Constraints:** The `--deps` mode requires pre-compiled **tree-sitter grammars** to be available on the system. If grammars are missing, the tool will exit with an error and instructions on how to install them.
+*   **Internal:** No explicit internal rate limiting. Performance is constrained by local CPU/disk I/O and the complexity of Tree-sitter parsing.
+*   **External:** Rate limiting is imposed by the consumed LLM services (OpenAI, Anthropic, etc.). The application relies on the underlying HTTP client and LLM SDKs to handle standard network errors, but no explicit retry/circuit breaker logic is immediately visible in the high-level `main.go` flow.
 
 ## External API Dependencies
 
-The project has one primary external dependency that involves executing an external program.
+The project relies heavily on external LLM providers for its advanced analysis features. The `codemap/analyze` package contains clients for these services.
 
 ### Services Consumed
 
-#### 1. Git Command Line Interface (CLI)
+| Service Name & Purpose | Base URL/Configuration | Endpoints Used | Authentication Method | Error Handling | Retry/Circuit Breaker Configuration |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **OpenAI API** (LLM Analysis) | Configured via `config.OpenAI.BaseURL` (default: `api.openai.com`) | `/v1/chat/completions`, `/v1/embeddings` | API Key (`config.OpenAI.APIKey`) | Standard SDK error handling. | Not explicitly configured in `main.go` or `config.go`. Relies on SDK defaults. |
+| **Anthropic API** (LLM Analysis) | Configured via `config.Anthropic.BaseURL` (default: `api.anthropic.com`) | `/v1/messages` | API Key (`config.Anthropic.APIKey`) | Standard SDK error handling. | Not explicitly configured. Relies on SDK defaults. |
+| **Ollama** (Local LLM) | Configured via `config.Ollama.BaseURL` (default: `http://localhost:11434`) | `/api/generate`, `/api/embeddings` | None (assumes local/internal network access) | Standard HTTP client error handling. | Not explicitly configured. |
 
-The project relies on the local installation of the `git` CLI tool to perform version control operations when the `--diff` flag is used.
+#### Configuration Details (`config/config.go`)
 
-| Attribute | Detail |
-| :--- | :--- |
-| **Service Name & Purpose** | **Git CLI:** Used to determine which files have changed between the current working directory and a specified reference (e.g., `main` branch). |
-| **Base URL/Configuration** | Local execution of the `git` binary (e.g., `/usr/bin/git`). |
-| **Endpoints Used** | The Go code executes `git diff --name-status <ref> -- .` to get the list of changed files and their status (Added, Modified, Deleted). |
-| **Authentication Method** | None. Relies on the local Git configuration and repository access permissions. |
-| **Error Handling** | If the `git` command fails (e.g., invalid reference, not a git repository), the `scanner.GitDiffInfo` function returns an error, and `main.go` prints the error to `stderr` and exits with status code 1. |
-| **Retry/Circuit Breaker Configuration** | None. The command is executed once. |
+The application uses a configuration structure (`config.Config`) to manage access to these services.
+
+*   **API Keys:** Keys are loaded from environment variables or a configuration file.
+    *   `OpenAI.APIKey`
+    *   `Anthropic.APIKey`
+*   **Model Selection:** The specific LLM model can be configured globally or overridden via the `--model` flag.
+*   **Timeouts:** The `analyze.Client` likely uses a default HTTP client, which may have a configurable or default timeout, but this is not exposed as a top-level CLI flag.
 
 ### Integration Patterns
 
-*   **Library Integration:** The project uses the `github.com/sabhiram/go-gitignore` library for file exclusion logic, which is a standard Go library integration pattern.
-*   **External Process Execution:** The integration with Git is done via executing an external process and capturing its standard output, a common pattern for CLI tools interacting with system utilities.
+*   **Client Factory:** The `analyze/factory.go` file is responsible for creating the correct LLM client (`analyze.Client`) based on the configuration (`--model` flag or default settings).
+*   **Caching:** The `codemap/cache` package is used to store results of expensive LLM requests (e.g., explanations, summaries) to prevent redundant API calls. This is bypassed with the `--no-cache` flag.
+*   **Retrieval-Augmented Generation (RAG):** The `--search`, `--explain`, and `--summarize` modes utilize the internal knowledge graph (`codemap/graph`) and vector embeddings (`codemap/analyze/embed.go`) to retrieve relevant code context before making the external LLM API call.
 
 ## Available Documentation
 
-The project includes internal documentation and development plans, but no formal, external API specification files (like OpenAPI/Swagger, GraphQL schemas, or Protocol Buffers).
-
 | Path | Description | Quality Evaluation |
 | :--- | :--- | :--- |
-| `main.go` | Defines the CLI interface and command-line flags, which serve as the primary API definition. | **High.** Clear definition of inputs and modes. |
-| `scanner/types.go` | Defines the `Project` and `DepsProject` structs, which are the JSON output schemas (the API contract). | **High.** Explicitly defines the machine-readable output structure. |
-| `/.ai/docs/api_analysis.md` | Internal documentation for AI agents, likely containing a preliminary analysis of the API surface. | **Medium.** Useful for context, but not the canonical source. |
-| `README.md` | Provides usage examples for the CLI, which implicitly documents the API's invocation. | **High.** Excellent for practical usage. |
-| `scanner/git.go` | Implements the logic for interacting with the external Git CLI. | **High.** Confirms and details the external dependency. |
+| `README.md` | Project overview, installation, and basic usage examples. | **High.** Provides a good starting point for users. |
+| `main.go` (Help Output) | Comprehensive documentation of all CLI flags and modes. | **High.** Serves as the primary API reference for the CLI. |
+| `/.ai/docs/api_analysis.md` | (Self-referential) This document, once generated. | N/A |
+| `/.ai/docs/data_flow_analysis.md` | Internal analysis of data flow within the application. | **Medium.** Useful for understanding internal component interaction. |
+| `/.ai/docs/dependency_analysis.md` | Internal analysis of code dependencies. | **Medium.** Useful for understanding internal component interaction. |
+| `/development-docs/` | Contains several detailed plans for feature implementation (e.g., knowledge graph, LLM integration). | **High.** Excellent for understanding the *design* and *future direction* of the LLM integrations. |
+| `/scanner/queries/*.scm` | Tree-sitter query files. | **Technical.** Essential for developers extending language support or understanding how code is parsed for dependency analysis. |
+
+**Documentation Quality Evaluation:** The CLI interface is well-documented via the `--help` flag and `README.md`. The internal LLM integrations are complex but have good supporting design documentation in `/development-docs`. The lack of a formal OpenAPI/Swagger specification is expected, as there is no HTTP API.

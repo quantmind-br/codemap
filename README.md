@@ -1,38 +1,222 @@
-# codemap: Codebase Analysis and Visualization Tool
+# codemap: GraphRAG-Powered Codebase Analysis
 
 ## Project Overview
 
-**codemap** is a powerful command-line interface (CLI) tool written in Go designed to analyze, map, and visualize the structure and dependencies of a codebase. It provides developers and automated systems (like LLM agents) with a clear, structured view of a project's architecture without needing to manually traverse the source code.
+**codemap** is a powerful command-line interface (CLI) tool written in Go designed to analyze, map, and understand codebases. It combines structural analysis with **GraphRAG (Graph-based Retrieval Augmented Generation)** capabilities, providing developers and LLM agents with deep insights into code architecture, dependencies, and semantics.
 
 ### Purpose and Main Functionality
-The primary purpose of `codemap` is to transform raw source code into structured data models (`Project`, `DepsProject`) that can be consumed for various purposes, including:
-1.  **Visualization:** Generating hierarchical file trees, "city skyline" representations of file complexity, and dependency graphs.
-2.  **Context Generation:** Providing detailed, structured JSON output of a codebase's structure, functions, types, and imports, which is ideal for feeding into Large Language Models (LLMs) for context-aware tasks.
-3.  **Change Impact Analysis:** Identifying and analyzing only the files that have changed relative to a Git reference, allowing for focused analysis and visualization.
+The primary purpose of `codemap` is to transform raw source code into structured knowledge that can be consumed for various purposes:
+
+1.  **Knowledge Graph:** Build a persistent graph of code symbols (functions, types, methods) and their relationships (calls, imports, contains).
+2.  **Semantic Search:** Find code using natural language queries, combining vector embeddings with graph-based name matching.
+3.  **LLM-Powered Analysis:** Explain code symbols and summarize modules using configurable LLM providers (Ollama, OpenAI, Anthropic).
+4.  **Visualization:** Generate hierarchical file trees, dependency graphs, and "city skyline" representations.
+5.  **Change Impact Analysis:** Identify files changed relative to a Git reference and analyze their impact on the codebase.
 
 ### Key Features and Capabilities
-*   **Multi-Mode Analysis:** Supports Tree View, Skyline View, Dependency Graph, and Public API View.
-*   **Deep Code Parsing:** Uses **Tree-sitter** grammars for language-aware parsing to extract functions, types, and imports with configurable detail levels.
-*   **Git Integration:** Respects `.gitignore` rules and performs Git diff analysis to focus on changed files.
-*   **Machine-Readable Output:** Can output all analysis results as structured JSON for programmatic consumption.
-*   **Model Context Protocol (MCP) Server:** Includes an optional server mode to expose its capabilities as tools for LLM agents.
+*   **GraphRAG Architecture:** Persistent knowledge graph with call graph extraction and hybrid semantic/structural search.
+*   **Multi-Mode Analysis:** Tree View, Skyline View, Dependency Graph, API View, Query Mode, and Search Mode.
+*   **Deep Code Parsing:** Uses **Tree-sitter** grammars for language-aware parsing (Go, Python, TypeScript, JavaScript, Rust, Java).
+*   **Hybrid Search:** Combines vector embeddings with Reciprocal Rank Fusion for accurate code discovery.
+*   **LLM Integration:** Explain symbols and summarize modules with Ollama, OpenAI, or Anthropic.
+*   **Git Integration:** Respects `.gitignore` rules and performs Git diff analysis.
+*   **Machine-Readable Output:** All commands support `--json` for programmatic consumption.
+*   **MCP Server:** Exposes 14 tools for LLM agents via Model Context Protocol.
 
 ### Likely Intended Use Cases
 *   **Developer Onboarding:** Quickly generating a visual map of a new codebase.
 *   **Code Review:** Analyzing the structural impact and dependencies of a pull request (`--diff` mode).
 *   **LLM Tooling:** Serving as a reliable, structured data source for AI-powered code analysis and generation tools.
 *   **Architectural Audits:** Mapping internal and external dependencies to identify coupling issues.
+*   **Semantic Code Search:** Finding code by describing what it does in natural language.
+
+## Quick Start
+
+```bash
+# Install
+go install github.com/your-repo/codemap@latest
+
+# Build knowledge graph
+codemap --index .
+
+# Query the call graph
+codemap --query --from main .           # What does main call?
+codemap --query --to LoadConfig .       # What calls LoadConfig?
+
+# Search the codebase
+codemap --search --q "parse config" .   # Natural language search
+codemap --search --q "http handler" --expand .  # With context
+
+# Generate embeddings for semantic search (requires LLM)
+codemap --embed .
+
+# Explain a symbol (requires LLM)
+codemap --explain --symbol main .
+
+# Summarize a module (requires LLM)
+codemap --summarize graph/ .
+
+# Traditional views
+codemap .                               # Tree view
+codemap --deps .                        # Dependency graph
+codemap --skyline .                     # City skyline visualization
+```
 
 ## Table of Contents
 1.  [Project Overview](#project-overview)
-2.  [Architecture](#architecture)
-3.  [C4 Model Architecture](#c4-model-architecture)
-4.  [Repository Structure](#repository-structure)
-5.  [Dependencies and Integration](#dependencies-and-integration)
-6.  [API Documentation](#api-documentation)
-7.  [Development Notes](#development-notes)
-8.  [Known Issues and Limitations](#known-issues-and-limitations)
-9.  [Additional Documentation](#additional-documentation)
+2.  [Quick Start](#quick-start)
+3.  [CLI Commands](#cli-commands)
+4.  [MCP Tools](#mcp-tools)
+5.  [Configuration](#configuration)
+6.  [Architecture](#architecture)
+7.  [C4 Model Architecture](#c4-model-architecture)
+8.  [Repository Structure](#repository-structure)
+9.  [Dependencies and Integration](#dependencies-and-integration)
+10. [API Documentation](#api-documentation)
+11. [Development Notes](#development-notes)
+12. [Known Issues and Limitations](#known-issues-and-limitations)
+13. [Additional Documentation](#additional-documentation)
+
+## CLI Commands
+
+### Visualization Modes
+
+| Command | Description |
+|---------|-------------|
+| `codemap .` | Tree view with file sizes and token estimates |
+| `codemap --deps .` | Dependency flow (imports, functions, types) |
+| `codemap --deps --detail 1 .` | With function signatures |
+| `codemap --deps --api .` | Public API surface only |
+| `codemap --skyline .` | ASCII city skyline visualization |
+| `codemap --skyline --animate .` | Animated skyline |
+| `codemap --diff .` | Only changed files vs main |
+| `codemap --diff --ref develop .` | Changed files vs develop |
+
+### Knowledge Graph
+
+| Command | Description |
+|---------|-------------|
+| `codemap --index .` | Build/update knowledge graph |
+| `codemap --index --force .` | Force full rebuild |
+| `codemap --query .` | Show graph statistics |
+| `codemap --query --from main .` | What does `main` call? |
+| `codemap --query --to Handler .` | What calls `Handler`? |
+| `codemap --query --from A --to B .` | Find path from A to B |
+| `codemap --query --depth 3 .` | Limit traversal depth |
+
+### Semantic Search
+
+| Command | Description |
+|---------|-------------|
+| `codemap --search --q "query" .` | Search codebase |
+| `codemap --search --q "query" --limit 5 .` | Limit results |
+| `codemap --search --q "query" --expand .` | Include callers/callees |
+| `codemap --embed .` | Generate embeddings |
+| `codemap --embed --force .` | Re-embed all symbols |
+
+### LLM Analysis
+
+| Command | Description |
+|---------|-------------|
+| `codemap --explain --symbol main .` | Explain a symbol |
+| `codemap --explain --symbol main --model llama3 .` | Use specific model |
+| `codemap --summarize graph/ .` | Summarize a module |
+| `codemap --summarize . --no-cache .` | Bypass cache |
+
+### Common Flags
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Output JSON for programmatic use |
+| `--help` | Show help message |
+| `--debug` | Show debug information |
+
+## MCP Tools
+
+The MCP server (v2.3.0) exposes 14 tools for LLM agents:
+
+| Tool | Description |
+|------|-------------|
+| `status` | Check server status and list tools |
+| `list_projects` | Discover projects in a directory |
+| `get_structure` | Project tree view |
+| `get_dependencies` | Import/function analysis |
+| `get_diff` | Changed files vs branch |
+| `find_file` | Search by filename pattern |
+| `get_importers` | Find what imports a file |
+| `get_symbol` | Search for functions/types by name |
+| `trace_path` | Find call path between symbols |
+| `get_callers` | Find what calls a symbol |
+| `get_callees` | Find what a symbol calls |
+| `explain_symbol` | LLM-powered code explanation |
+| `summarize_module` | LLM-powered module summary |
+| `semantic_search` | Hybrid semantic/graph search |
+
+### Running the MCP Server
+
+```bash
+# Build the MCP server
+go build -o codemap-mcp ./mcp/
+
+# Run (typically configured in Claude Desktop or similar)
+./codemap-mcp
+```
+
+### Claude Desktop Configuration
+
+Add to `~/.config/claude-desktop/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "codemap": {
+      "command": "/path/to/codemap-mcp"
+    }
+  }
+}
+```
+
+## Configuration
+
+### LLM Configuration
+
+Create `~/.config/codemap/config.yaml`:
+
+```yaml
+llm:
+  provider: ollama          # ollama, openai, or anthropic
+  model: llama3             # Model for completions
+  embedding_model: nomic-embed-text  # Model for embeddings
+  temperature: 0.3
+  max_tokens: 2048
+  timeout: 120
+
+# Ollama-specific (default)
+ollama:
+  host: http://localhost:11434
+
+# OpenAI (set OPENAI_API_KEY env var)
+# openai:
+#   api_key: sk-...
+
+# Anthropic (set ANTHROPIC_API_KEY env var)
+# anthropic:
+#   api_key: sk-ant-...
+
+cache:
+  enabled: true
+  ttl: 168h  # 7 days
+```
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `CODEMAP_LLM_PROVIDER` | Override LLM provider |
+| `OLLAMA_HOST` | Ollama server URL |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `ANTHROPIC_API_KEY` | Anthropic API key |
+| `CODEMAP_GRAMMAR_DIR` | Custom grammar location |
 
 ## Architecture
 
@@ -148,11 +332,15 @@ C4Container
 
 | Directory/File | Purpose |
 | :--- | :--- |
-| `/` | Contains the main application entry point (`main.go`) and configuration files. |
-| `/scanner` | **Core Logic:** Houses the analysis engine, including file system traversal, Git integration, Tree-sitter parsing, and all core data models (`types.go`). |
-| `/render` | **Presentation Layer:** Contains logic for all visualization modes (Tree, Skyline, Depgraph) and terminal formatting. |
-| `/mcp` | Contains the entry point (`main.go`) and handlers for the Model Context Protocol (MCP) server implementation. |
-| `/development-docs` | Stores detailed planning and technical documentation for feature development. |
+| `/` | Main CLI entry point (`main.go`) and configuration files. |
+| `/graph` | **Knowledge Graph:** Graph types, persistence, queries, and vector index. |
+| `/analyze` | **LLM Integration:** Client layer, embedding pipeline, hybrid search retriever. |
+| `/config` | **Configuration:** YAML config loading and validation. |
+| `/cache` | **Caching:** File-based response cache with TTL. |
+| `/scanner` | **Code Analysis:** File traversal, Tree-sitter parsing, call extraction. |
+| `/render` | **Presentation:** Tree, Skyline, Depgraph visualization. |
+| `/mcp` | **MCP Server:** Model Context Protocol server and tool handlers. |
+| `/development-docs` | Planning and technical documentation. |
 
 ## Dependencies and Integration
 
@@ -161,10 +349,14 @@ The project maintains a clear, hierarchical dependency structure:
 
 | Package | Depends On | Nature of Dependency |
 | :--- | :--- | :--- |
-| **main** (`/`) | `scanner`, `render` | Orchestration (Control flow and data passing). |
-| **mcp/main** | `scanner`, `render` | Orchestration (Server handlers). |
-| **render** | `scanner` | Data Coupling (Consumes data structures like `scanner.Project`). |
-| **scanner** | *None* | Highly cohesive core logic module. |
+| **main** (`/`) | `graph`, `analyze`, `config`, `cache`, `scanner`, `render` | Orchestration (Control flow). |
+| **mcp/main** | `graph`, `analyze`, `config`, `cache`, `scanner`, `render` | Orchestration (Server handlers). |
+| **analyze** | `graph`, `config`, `cache` | LLM integration and search. |
+| **graph** | *None* | Knowledge graph and vector storage. |
+| **config** | *None* | Configuration loading. |
+| **cache** | *None* | Response caching. |
+| **render** | `scanner` | Data Coupling (Visualization). |
+| **scanner** | *None* | Core parsing logic. |
 
 ### External Service Integrations
 The application integrates with two primary external systems:

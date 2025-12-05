@@ -1,96 +1,118 @@
 # Request Flow Analysis
-The `codemap` application is a Command Line Interface (CLI) tool written in Go. Its "request flow" is the process of parsing command-line arguments, executing the requested analysis mode, and rendering the output. It does not handle external network requests, so the analysis is adapted to the CLI execution lifecycle.
-
 ## Entry Points Overview
-The system has a single entry point:
-*   **`main.go:main()`**: This function is the application's starting point. It is responsible for parsing command-line flags, determining the execution mode (tree, skyline, or dependency graph), and orchestrating the file scanning and rendering process.
+The application is a command-line interface (CLI) tool written in Go. The entire control flow begins and is dispatched from a single entry point:
+
+*   **Entry Point:** `main.main()` in `main.go`.
+
+The `main` function is responsible for parsing command-line flags, performing initial setup (like path resolution and gitignore loading), and then dispatching control to a specific mode function based on the flags provided by the user.
 
 ## Request Routing Map
-The "routing" is a decision tree based on the presence and combination of command-line flags.
+The "routing" mechanism is a sequential check of boolean flags within the `main()` function, which determines the operational mode and calls the corresponding handler function. Only one mode is executed per invocation.
 
-| Request (Flags) | Preprocessing/Mode Selection | Core Logic Handler | Final Output/Renderer |
-| :--- | :--- | :--- | :--- |
-| `--help` | Flag parsing | Print help message | `os.Exit(0)` |
-| `--deps` | `runDepsMode` call | `scanner.ScanForDeps` | `render.Depgraph` or `render.APIView` |
-| `--skyline` | Set `mode = "skyline"` | `scanner.ScanFiles` | `render.Skyline` |
-| (Default) | Set `mode = "tree"` | `scanner.ScanFiles` | `render.Tree` |
-| Any Mode + `--diff` | `scanner.GitDiffInfo` | `scanner.FilterToChangedWithInfo`, `scanner.AnalyzeImpact` | (Mode-specific renderer) |
-| Any Mode + `--json` | (Mode-specific logic) | (Mode-specific logic) | `json.NewEncoder(os.Stdout).Encode` |
+| Mode Flag | Handler Function | Description |
+| :--- | :--- | :--- |
+| `--help` | (Inline) | Prints usage information and exits. |
+| `--index` | `runIndexMode` | Builds the knowledge graph index. |
+| `--query` | `runQueryMode` | Queries the existing knowledge graph. |
+| `--explain` | `runExplainMode` | Explains a symbol using an LLM. |
+| `--summarize` | `runSummarizeMode` | Summarizes a module/directory using an LLM. |
+| `--embed` | `runEmbedMode` | Generates vector embeddings for the graph. |
+| `--search` | `runSearchMode` | Performs semantic or graph search. |
+| `--deps` | `runDepsMode` | Generates a dependency flow map. |
+| **Default** | (Inline) | Executes the default file tree view or skyline visualization. |
 
 ## Middleware Pipeline
-In the context of this CLI, the "middleware pipeline" consists of sequential preprocessing steps applied to the input path and flags before the core analysis begins.
+In a CLI context, the middleware pipeline consists of initial setup and preprocessing steps executed before the main mode handler is called.
 
-1.  **Argument Parsing:** `flag.Parse()` reads all command-line arguments and sets the global flag variables.
-2.  **Root Path Resolution:** The positional argument (or `.` by default) is resolved to an absolute path using `filepath.Abs()`.
-3.  **Gitignore Loading:** `scanner.LoadGitignore(root)` reads the project's `.gitignore` file to establish file exclusion rules for the subsequent scan.
-4.  **Diff Analysis (`--diff`):** If the `--diff` flag is present, `scanner.GitDiffInfo(absRoot, *diffRef)` is executed. This step uses Git to determine the set of files that have changed relative to the specified reference branch (defaulting to `main`).
-5.  **Impact Analysis (Post-Scan, if `--diff`):** For non-dependency modes, after `scanner.ScanFiles` completes, `scanner.FilterToChangedWithInfo` and `scanner.AnalyzeImpact` are called to annotate the scanned files with diff and impact information.
+1.  **Flag Parsing:** `flag.Parse()` processes all command-line arguments and populates the mode flags and options (e.g., `--skyline`, `--ref`, `--detail`).
+2.  **Path Resolution:** The root path argument is resolved to an absolute path (`filepath.Abs(root)`).
+3.  **Gitignore Loading:** `scanner.LoadGitignore(root)` loads the project's `.gitignore` file to filter files during scanning.
+4.  **Diff Analysis (Conditional):** If the `--diff` flag is set, `scanner.GitDiffInfo` is called to determine the set of changed files against the specified reference branch (`--ref`). This result is passed to subsequent mode handlers for filtering.
 
 ## Controller/Handler Analysis
-The application logic is split into two main "controllers" based on the execution mode:
+The core logic resides in the `run*Mode` functions, which act as controllers for the application's various features.
 
-### 1. `runDepsMode` (Dependency Graph Handler)
-This function handles the `--deps` flag and is responsible for deep code analysis.
-*   **Grammar Check:** It first verifies the availability of tree-sitter grammars using `scanner.NewGrammarLoader().HasGrammars()`. If grammars are missing, it prints an error and exits.
-*   **Core Analysis:** It calls `scanner.ScanForDeps(root, gitignore, loader, detailLevel)` to perform syntax-aware analysis, extracting functions, types, and dependencies based on the requested `detailLevel`.
-*   **External Dependencies:** It calls `scanner.ReadExternalDeps(absRoot)` (defined in `scanner/deps.go`) to parse manifest files (`go.mod`, `package.json`, `requirements.txt`, etc.) and collect external library dependencies.
-*   **Response:** The results are packaged into a `scanner.DepsProject` struct and passed to either `render.APIView` (if `--api` is set), `render.Depgraph`, or JSON encoding.
+### Data Flow for Graph/LLM Modes (`runIndexMode`, `runQueryMode`, `runExplainMode`, `runSummarizeMode`, `runEmbedMode`, `runSearchMode`)
+1.  **Configuration Loading:** `config.Load()` is called to retrieve application settings, particularly for LLM and caching.
+2.  **Graph Loading:** Most modes (`query`, `explain`, `embed`, `search`) start by loading the serialized `graph.CodeGraph` from `.codemap/graph.gob` using `graph.LoadBinary`.
+3.  **LLM Client Initialization:** LLM-dependent modes (`explain`, `summarize`, `embed`, `search`) create an LLM client via `analyze.NewClient(cfg)`.
+4.  **Caching:** `cache.New` is initialized. For `explain` and `summarize`, a cache check (`responseCache.GetByContentHash`) is performed before making an LLM request.
+5.  **LLM Interaction:**
+    *   **Prompt Generation:** Functions like `analyze.ExplainSymbolPrompt` or `analyze.SummarizeModulePrompt` prepare the request payload.
+    *   **API Call:** `client.Complete` is called with a context timeout (`context.WithTimeout`) to execute the LLM request.
+    *   **Caching:** The response is stored using `responseCache.SetResponse`.
 
-### 2. Main Logic Block (Tree/Skyline Handler)
-This block handles the default tree view and the skyline visualization.
-*   **Core Analysis:** It calls `scanner.ScanFiles(root, gitignore)` to recursively walk the directory tree, collecting basic file metadata (size, path, etc.).
-*   **Response:** The results are packaged into a `scanner.Project` struct and passed to either `render.Skyline` (if `--skyline` is set), `render.Tree`, or JSON encoding.
+### Core Scanning and Rendering Modes
+*   **`runDepsMode`:** Uses `scanner.ScanForDeps` with a `scanner.NewGrammarLoader` to perform deep dependency analysis (functions, types, calls). The results are rendered by `render.Depgraph` or `render.APIView`.
+*   **Default Mode:** Uses `scanner.ScanFiles` for a shallow file scan (size, token count). Results are passed to `render.Tree` or `render.Skyline`.
 
 ## Authentication & Authorization Flow
-Not applicable. As a local CLI tool, `codemap` operates on the local file system and does not implement any authentication or authorization mechanisms.
+The application is a local CLI tool and does not implement any user-facing authentication or authorization flow. Access control is managed by the operating system's file permissions.
+
+For LLM interactions, the application relies on API keys or credentials configured in the `~/.config/codemap/config.yaml` file, which are loaded by `config.Load()` and used by `analyze.NewClient` to establish a connection with the LLM provider.
 
 ## Error Handling Pathways
-Error handling is immediate and results in application termination with a non-zero exit code (`os.Exit(1)`), printing the error to `os.Stderr`.
+Error handling is synchronous and immediate, following standard Go CLI practices:
 
-*   **Initialization Errors:** Errors during `filepath.Abs` or `scanner.GitDiffInfo` (e.g., invalid git reference) cause immediate exit.
-*   **Scanning Errors:** Errors during `scanner.ScanFiles` (file system traversal failure) or `scanner.ScanForDeps` (tree-sitter parsing failure) cause immediate exit.
-*   **Configuration Errors:** If `--deps` is used without required tree-sitter grammars, a detailed warning is printed, and the application exits.
+1.  **Error Check:** Errors are checked immediately after functions that can fail (e.g., `filepath.Abs`, `scanner.GitDiffInfo`, `graph.LoadBinary`, `client.Ping`, `client.Complete`).
+2.  **Output to Stderr:** Error messages are printed to the standard error stream using `fmt.Fprintf(os.Stderr, ...)`.
+3.  **Termination:** The application terminates with a non-zero exit code (`os.Exit(1)`) upon encountering a critical error (e.g., file not found, failed LLM connection, missing grammars).
+4.  **Graceful Failures:** In `runEmbedMode` and `runSearchMode`, failure to load the vector index results in a warning and a fallback to graph-only search, rather than immediate termination.
 
 ## Request Lifecycle Diagram
 
 ```mermaid
 graph TD
-    A[Start: main.go:main()] --> B{Parse Flags: flag.Parse()};
-    B --> C{Is --help?};
-    C -- Yes --> D[Print Help & Exit];
-    C -- No --> E[Resolve Root Path];
-    E --> F[Load .gitignore];
-    F --> G{Is --diff?};
-    G -- Yes --> H[scanner.GitDiffInfo];
-    G -- No --> I{Is --deps?};
+    A[CLI Invocation] --> B(main.main);
+    B --> C{Parse Flags};
+    C --> D(Resolve Root Path & Load .gitignore);
+    D -- --diff flag --> E(scanner.GitDiffInfo);
+    D -- No diff --> F{Mode Dispatch};
 
-    H --> I;
+    subgraph Mode Handlers
+        F -- --index --> G(runIndexMode);
+        F -- --query --> H(runQueryMode);
+        F -- --explain/--summarize/--embed/--search --> I(LLM/Graph Modes);
+        F -- --deps --> J(runDepsMode);
+        F -- Default/--skyline --> K(Default Scan & Render);
+    end
 
-    I -- Yes --> J[Call runDepsMode];
-    J --> K{Check Grammars};
-    K -- Missing --> L[Error: Grammars Missing & Exit];
-    K -- OK --> M[scanner.ScanForDeps];
-    M --> N[scanner.ReadExternalDeps];
-    N --> O{Is --json?};
-    O -- Yes --> P[JSON Encode DepsProject];
-    O -- No --> Q{Is --api?};
-    Q -- Yes --> R[render.APIView];
-    Q -- No --> S[render.Depgraph];
-    S --> Z[End];
-    R --> Z;
-    P --> Z;
-    L --> Z;
+    subgraph LLM/Graph Modes
+        I --> I1(config.Load);
+        I1 --> I2(graph.LoadBinary);
+        I2 --> I3(analyze.NewClient);
+        I3 --> I4(client.Ping);
+        I4 --> I5{Cache Check};
+        I5 -- Cache Miss --> I6(client.Complete);
+        I6 --> I7(Cache Write);
+        I7 --> I8(Output Result);
+        I5 -- Cache Hit --> I8;
+    end
 
-    I -- No --> T[scanner.ScanFiles];
-    T --> U{Is --diff?};
-    U -- Yes --> V[Filter & AnalyzeImpact];
-    U -- No --> W[Build Project Struct];
-    V --> W;
-    W --> X{Is --json?};
-    X -- Yes --> P;
-    X -- No --> Y{Is --skyline?};
-    Y -- Yes --> R1[render.Skyline];
-    Y -- No --> S1[render.Tree];
-    R1 --> Z;
-    S1 --> Z;
+    subgraph Index Mode
+        G --> G1(scanner.ScanForDeps);
+        G1 --> G2{Incremental Check};
+        G2 -- Stale/Force --> G3(graph.NewBuilder);
+        G3 --> G4(builder.AddFile & Resolve Edges);
+        G4 --> G5(codeGraph.SaveBinary);
+    end
+
+    subgraph Dependency Mode
+        J --> J1(scanner.ScanForDeps);
+        J1 --> J2(render.Depgraph/APIView);
+    end
+
+    subgraph Default Mode
+        K --> K1(scanner.ScanFiles);
+        K1 --> K2(render.Tree/Skyline);
+    end
+
+    E --> F;
+    G5 --> Z(Exit 0);
+    H --> Z;
+    I8 --> Z;
+    J2 --> Z;
+    K2 --> Z;
+    B --> B_Err{Error Check};
+    B_Err -- Error --> Z_Err(Output Error & Exit 1);
 ```

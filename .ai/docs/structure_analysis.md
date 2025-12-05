@@ -1,105 +1,88 @@
+The project at `.` is a sophisticated code analysis tool written in Go. Its primary function is to scan a codebase, build a structural graph representation, and leverage Large Language Models (LLMs) for deeper, context-aware analysis. The architecture is modular, separating concerns into scanning, graph management, LLM interaction, and rendering. The heavy reliance on `tree-sitter` within the `/scanner` package is a key architectural decision, providing robust, language-agnostic parsing capabilities.
+
 # Code Structure Analysis
 ## Architectural Overview
-The codebase implements a command-line interface (CLI) tool, `codemap`, designed to analyze and visualize the structure of a codebase. It follows a clear **Layered Architecture** or **Pipeline Pattern**, separating concerns into three main layers:
+The codebase follows a layered, modular architecture, primarily centered around a **Code Graph** data model. It can be described as a **Pipeline Architecture** with distinct stages:
 
-1.  **Control/Orchestration Layer (Root/`main` package):** Handles command-line argument parsing, mode selection (tree, skyline, deps, diff), and orchestrates the flow of execution.
-2.  **Data Acquisition/Analysis Layer (`scanner` package):** The core domain logic. It is responsible for file system traversal, git integration (diffing, ignore rules), and language-specific code parsing (using tree-sitter grammars) to extract structural information (functions, types, imports).
-3.  **Presentation Layer (`render` package):** Responsible for formatting and outputting the analysis results in various visualization modes (terminal tree, skyline, dependency graph, or raw JSON).
+1.  **Configuration & Initialization:** Handled by the `/config` package and the main entry point (`main.go`).
+2.  **Scanning & Parsing (Source Layer):** The `/scanner` package uses `tree-sitter` to perform Abstract Syntax Tree (AST) parsing, extracting symbols, calls, and dependencies from source code files across multiple languages.
+3.  **Graph Construction (Core Layer):** The `/graph` package takes the raw data from the scanner and transforms it into a persistent, queryable graph structure (likely a Knowledge Graph).
+4.  **Analysis & Intelligence (Service Layer):** The `/analyze` package integrates with various LLM providers (OpenAI, Anthropic, Ollama) to perform advanced analysis on the code graph and source code snippets, using structured prompts and token management.
+5.  **Presentation (Output Layer):** The `/render` package is responsible for visualizing and outputting the analysis results in different formats, such as dependency graphs, tree views, and API summaries.
 
-The architecture is highly modular, with the `scanner` package producing well-defined data structures (`Project`, `DepsProject`) that serve as the contract for the `render` package.
+This separation ensures that the core logic (scanning and graph building) is decoupled from external services (LLMs) and presentation logic (rendering).
 
 ## Core Components
-The system is built around two primary Go packages: `scanner` and `render`.
-
-### 1. `scanner` Package
-**Purpose:** The analysis engine of the application. It abstracts away the complexities of file system interaction, git operations, and source code parsing.
-**Key Files/Modules:**
-*   `types.go`: Defines the canonical data structures (`FileInfo`, `FuncInfo`, `TypeInfo`, `FileAnalysis`, `Project`, `DepsProject`) that model the codebase structure. This is the core data contract.
-*   `walker.go` (Inferred): Responsible for file system traversal (`ScanFiles`).
-*   `git.go` (Inferred): Handles git-related operations, specifically loading `.gitignore` rules (`LoadGitignore`) and calculating file differences (`GitDiffInfo`).
-*   `grammar.go` (Inferred): Manages the loading and availability of language grammars (tree-sitter) required for deep code analysis.
-*   `deps.go` (Inferred): Contains the logic for dependency analysis (`ScanForDeps`), which uses the loaded grammars to parse code and extract symbols and imports.
-
-### 2. `render` Package
-**Purpose:** The visualization and output layer. It consumes the structured data from the `scanner` and presents it to the user in a readable format.
-**Key Files/Modules:**
-*   `tree.go`: Implements the default hierarchical file tree view (`render.Tree`).
-*   `skyline.go`: Implements the "city skyline" visualization, likely mapping file size/complexity to building height (`render.Skyline`).
-*   `depgraph.go`: Implements the dependency graph visualization (`render.Depgraph`).
-*   `api.go`: Implements the public API surface view (`render.APIView`).
-*   `colors.go`: Utility functions for terminal color formatting.
+| Component | Directory | Purpose & Responsibility |
+| :--- | :--- | :--- |
+| **Scanner** | `/scanner` | The primary code ingestion engine. Responsible for traversing the file system, parsing source files using `tree-sitter` grammars, and extracting structural information (symbols, calls, dependencies). It abstracts the complexity of language-specific parsing. |
+| **Code Graph** | `/graph` | The central data repository and domain model. It manages the persistence (`store.go`), construction (`builder.go`), and querying (`query.go`) of the code's structural map. It defines the core data types for nodes and edges (`types.go`). |
+| **Analyzer** | `/analyze` | The intelligence layer. It orchestrates interactions with external LLMs, manages API clients, handles prompt engineering (`prompts.go`), and performs token counting (`tokens.go`) to analyze code snippets and graph data. |
+| **Configuration** | `/config` | Manages application settings, including LLM API keys, model names, and project-specific configurations. It provides a single source of truth for runtime parameters. |
+| **Renderer** | `/render` | The output formatter. It takes the processed data from the graph and analysis layers and formats it for human consumption or further processing (e.g., dependency graphs, tree structures). |
+| **Cache** | `/cache` | Provides a mechanism for storing and retrieving expensive computation results, likely for parsed ASTs or graph segments, to speed up subsequent runs. |
 
 ## Service Definitions
-The application's capabilities are defined by the following high-level services:
+The project defines services primarily through the organization of its packages, where each package acts as a service boundary.
 
-| Service/Function | Package | Responsibility |
+| Service/Module | Key Files | Responsibility |
 | :--- | :--- | :--- |
-| `main()` | `main` | Application entry point. Parses CLI flags and delegates to the appropriate scanner and renderer functions based on the selected mode. |
-| `runDepsMode()` | `main` | Specialized orchestration for dependency analysis mode (`--deps`). Ensures grammars are loaded and calls the dependency scanner and renderer. |
-| `ScanFiles(root, gitignore)` | `scanner` | Traverses the file system starting at `root`, respecting `.gitignore` rules, and collects basic `FileInfo` for all relevant files. |
-| `GitDiffInfo(root, ref)` | `scanner` | Interacts with Git to determine which files have changed relative to a specified reference branch (`ref`), enabling the `--diff` mode. |
-| `ScanForDeps(root, gitignore, loader, detail)` | `scanner` | Performs deep code analysis using tree-sitter grammars to extract functions, types, and imports, returning a list of `FileAnalysis` objects. |
-| `AnalyzeImpact(root, files)` | `scanner` | (Inferred) Calculates the structural impact of changed files, likely by analyzing dependencies or file relationships. |
-| `Tree(project)` | `render` | Renders the `Project` data structure as a hierarchical file tree in the terminal. |
-| `Skyline(project, animate)` | `render` | Renders the `Project` data structure as a visual skyline representation. |
-| `Depgraph(depsProject)` | `render` | Renders the `DepsProject` data structure as a dependency flow map. |
-| `APIView(depsProject)` | `render` | Renders a compact view of the public API surface extracted from the `DepsProject`. |
+| **LLM Client Service** | `/analyze/client.go`, `/analyze/openai.go`, `/analyze/anthropic.go`, `/analyze/ollama.go` | Provides a unified interface for communicating with different LLM providers. Each file implements the specific API calls for its respective provider, abstracting the LLM interaction details from the core analysis logic. |
+| **Graph Store Service** | `/graph/store.go` | Handles the serialization and deserialization of the code graph to and from persistent storage (e.g., `graph.gob`). It ensures the graph state can be saved and loaded efficiently. |
+| **Grammar Management Service** | `/scanner/grammar.go` | Manages the loading and initialization of the various `tree-sitter` language grammars, which are essential for the scanner's operation. |
+| **Source Retrieval Service** | `/analyze/retriever.go`, `/analyze/source.go` | Responsible for fetching and preparing source code snippets based on file paths and line numbers, often in preparation for LLM analysis. |
 
 ## Interface Contracts
-While no explicit Go interfaces are visible in the provided files, the structural contracts are defined by the data transfer objects (DTOs) in `scanner/types.go`. These structs act as the implicit interfaces between the `scanner` and `render` packages.
+While the full set of interfaces requires deeper code inspection, the structure suggests the use of interfaces for abstraction, particularly in the `/analyze` package to support multiple LLM providers.
 
-| Contract (Struct) | Purpose | Used by |
+| Potential Interface | Location | Likely Methods/Purpose |
 | :--- | :--- | :--- |
-| `FileInfo` | Basic file metadata (path, size, diff stats). | `scanner` (producer), `Project` (container). |
-| `Project` | Root data model for Tree and Skyline modes. | `scanner` (producer), `render.Tree`, `render.Skyline` (consumers). |
-| `FuncInfo` | Detailed information about a function or method. | `scanner` (producer), `FileAnalysis` (container). |
-| `TypeInfo` | Detailed information about a type definition (struct, class, interface). | `scanner` (producer), `FileAnalysis` (container). |
-| `FileAnalysis` | Aggregated structural data for a single file (functions, types, imports). | `scanner` (producer), `DepsProject` (container). |
-| `DepsProject` | Root data model for Dependency Graph mode. | `scanner` (producer), `render.Depgraph`, `render.APIView` (consumers). |
-| `DetailLevel` (Enum) | Defines the depth of analysis (0=None, 1=Signature, 2=Full). | `main` (input), `scanner` (logic). |
+| **`LLMClient`** | `/analyze/client.go` | Defines the contract for interacting with any LLM (e.g., `AnalyzeCode(prompt string) (response string, error)`). Implemented by `OpenAIClient`, `AnthropicClient`, etc. |
+| **`GraphStore`** | `/graph/store.go` | Defines methods for persisting and loading the graph (e.g., `Load(path string) (*Graph, error)`, `Save(path string) error`). |
+| **`CodeScanner`** | `/scanner` | Defines the contract for scanning a directory and returning a structured representation of the code (e.g., `Scan(dir string) (*ScanResult, error)`). |
+| **`Renderer`** | `/render` | Defines methods for outputting data in a specific format (e.g., `RenderTree(data *Graph)`, `RenderDepGraph(data *Graph)`). |
 
 ## Design Patterns Identified
-*   **Command Line Interface (CLI) Pattern:** The `main` package uses the standard `flag` package to define and parse arguments, controlling the application's behavior based on user input.
-*   **Data Transfer Object (DTO) Pattern:** The structs in `scanner/types.go` (`Project`, `DepsProject`, `FileInfo`, etc.) are pure data containers used to pass information between the `scanner` and `render` layers, ensuring loose coupling.
-*   **Strategy Pattern (Implicit):** The application's behavior is determined by the selected mode (e.g., `--skyline`, `--deps`). The `main` function acts as the context, selecting the appropriate "strategy" function from the `render` package (`render.Tree`, `render.Skyline`, `render.Depgraph`) to execute the final output.
-*   **Adapter Pattern (Implicit):** The `scanner` package uses `tree-sitter` (a C library, inferred from `scanner/.grammar-build`) to parse various languages. The Go code acts as an adapter, translating the language-agnostic AST output from tree-sitter into the application's canonical Go DTOs (`FuncInfo`, `TypeInfo`).
+1.  **Adapter Pattern:** Clearly used in the `/analyze` package. `client.go` likely defines a common interface, and files like `openai.go` and `anthropic.go` act as adapters to fit the specific vendor APIs into this common interface.
+2.  **Factory Pattern:** Suggested by `/analyze/factory.go`, which is likely responsible for creating the correct `LLMClient` implementation based on configuration (e.g., which LLM provider is selected).
+3.  **Repository Pattern:** The `/graph` package, particularly `store.go` and `query.go`, acts as a repository for the code graph, abstracting the data storage and retrieval logic from the business logic.
+4.  **Builder Pattern:** Suggested by `/graph/builder.go`, which is responsible for the complex, step-by-step construction of the `Graph` object from the raw data provided by the scanner.
 
 ## Component Relationships
-The flow of control and data is strictly unidirectional:
-
-1.  **`main`** initiates the process.
-2.  **`main`** calls **`scanner`** functions (`ScanFiles` or `ScanForDeps`).
-3.  **`scanner`** performs analysis and returns a root data structure (`Project` or `DepsProject`).
-4.  **`main`** passes the returned data structure to the appropriate **`render`** function (`Tree`, `Skyline`, `Depgraph`, or `APIView`).
-5.  **`render`** outputs the final result to `os.Stdout`.
-
-**Key Dependencies:**
-*   `main` depends on `scanner` and `render`.
-*   `scanner` depends on external libraries for git interaction (`GitDiffInfo`) and grammar parsing (tree-sitter, managed via `scanner/.grammar-build`).
-*   `render` depends only on the data structures defined in `scanner/types.go`.
+1.  **`/config` -> All Components:** The `config` package is a dependency for almost all other packages, providing necessary runtime parameters (API keys, model names, paths).
+2.  **`/scanner` -> `/graph`:** The `scanner` is a producer of raw structural data (symbols, calls, dependencies), which is consumed by the `graph/builder` to construct the core `Graph` model.
+3.  **`/graph` -> `/analyze`:** The `analyze` package queries the `graph` for structural context before generating prompts for the LLMs.
+4.  **`/analyze` -> External LLMs:** The `analyze` package is the sole intermediary between the application and external AI services.
+5.  **`/graph` & `/analyze` -> `/render`:** The `render` package consumes the final, processed data from both the `graph` (for structural views) and potentially the `analyze` package (for LLM-generated summaries) to produce the final output.
+6.  **`/scanner` -> `tree-sitter` (External Dependency):** The `scanner` package is tightly coupled with the `tree-sitter` C libraries, which are managed and built within the `/scanner/.grammar-build` directory.
 
 ## Key Methods & Functions
-| Method/Function | Location | Capability |
-| :--- | :--- | :--- |
-| `main.main()` | `main.go` | **Orchestration & Configuration:** Defines all CLI flags and executes the core logic based on the chosen mode. |
-| `scanner.ScanForDeps()` | `scanner/deps.go` (Inferred) | **Deep Analysis:** The primary function for extracting structural code elements (symbols, types, imports) using language grammars. |
-| `scanner.IsExportedName()` | `scanner/types.go` | **Language Abstraction:** Provides a normalized way to determine symbol visibility (public/private) across different language conventions (Go, Python, etc.). |
-| `render.Skyline()` | `render/skyline.go` | **Visualization:** Transforms file size and complexity data into a visual, spatial representation. |
-| `render.Depgraph()` | `render/depgraph.go` | **Relationship Mapping:** Presents the extracted functions, types, and imports as a flow map, highlighting dependencies. |
-| `scanner.LoadGitignore()` | `scanner/git.go` (Inferred) | **Filtering:** Ensures that the analysis respects standard repository exclusion rules, crucial for performance and relevance. |
+Based on the file names, the following methods are critical to the application's capabilities:
+
+| Package | File | Key Function/Method (Inferred) | Capability |
+| :--- | :--- | :--- | :--- |
+| `/scanner` | `walker.go` | `Walk(sourceCode []byte, language string) (*ScanResult, error)` | Core function for traversing the AST and extracting structural data. |
+| `/scanner` | `symbol.go` | `ExtractSymbols(node *tree_sitter.Node)` | Identifies and catalogs defined entities (functions, classes, variables) in a file. |
+| `/graph` | `builder.go` | `NewGraphBuilder().Build(scanResults []*ScanResult)` | Constructs the complete, interconnected code graph from all scanned files. |
+| `/graph` | `query.go` | `QueryDependencies(symbolID string)` | Retrieves the upstream and downstream dependencies for a given code entity. |
+| `/analyze` | `client.go` | `Analyze(prompt string, context *Graph)` | Sends a structured prompt and relevant code context to an LLM for analysis. |
+| `/analyze` | `tokens.go` | `CountTokens(text string)` | Manages token limits, crucial for cost and performance of LLM interactions. |
+| `/render` | `depgraph.go` | `RenderDependencyGraph(graph *Graph)` | Generates a visual or textual representation of the system's dependency structure. |
+| `/render` | `tree.go` | `RenderFileTree(graph *Graph)` | Generates a hierarchical, structural view of the codebase. |
 
 ## Available Documentation
-The project includes a dedicated documentation directory, indicating a commitment to internal and external documentation.
+The project includes a significant amount of internal and external documentation.
 
 | Document Path | Evaluation |
 | :--- | :--- |
-| `/.ai/docs/api_analysis.md` | **High Value:** Likely details the output format and structure of the API surface analysis (`--api` mode). |
-| `/.ai/docs/data_flow_analysis.md` | **High Value:** Should describe how data moves through the system, particularly between `scanner` and `render`. |
-| `/.ai/docs/dependency_analysis.md` | **High Value:** Crucial for understanding the logic behind `ScanForDeps` and how dependencies are resolved. |
-| `/.ai/docs/request_flow_analysis.md` | **High Value:** Likely describes the execution path from CLI input to final output. |
-| `/.ai/docs/structure_analysis.md` | **High Value:** A previous structural analysis, which can be used for comparison or deeper insight. |
-| `/development-docs/0001-enhanced-code-analysis-plan.md` | **High Value (Planning):** Outlines the strategy for improving the code analysis capabilities, possibly related to the `--detail` and `--api` flags. |
-| `/development-docs/0002-token-heuristics-symbol-search-plan.md` | **High Value (Technical):** Details the implementation plan for token estimation (`EstimateTokens` in `scanner/types.go`) and symbol search, indicating future or current advanced features. |
-| `/.serena/memories/project_overview.md` | **Contextual Value:** Provides a high-level summary of the project, useful for quick orientation. |
+| `/.ai/docs/api_analysis.md` | **High Relevance:** Likely details the LLM API interaction and data formats. |
+| `/.ai/docs/data_flow_analysis.md` | **High Relevance:** Crucial for understanding how data moves between the scanner, graph, and analyzer. |
+| `/.ai/docs/dependency_analysis.md` | **High Relevance:** Explains the logic behind dependency extraction in the `/scanner` and `/graph` packages. |
+| `/.ai/docs/request_flow_analysis.md` | **High Relevance:** Describes the end-to-end process, especially the flow from user request to final output. |
+| `/.ai/docs/structure_analysis.md` | **High Relevance:** A pre-existing structural analysis, which should be compared against this current analysis for completeness. |
+| `/development-docs/0001-enhanced-code-analysis-plan.md` | **High Relevance:** Provides insight into planned or recent architectural changes and feature goals. |
+| `/development-docs/plans/01_knowledge_graph.md` | **High Relevance:** Details the design and implementation strategy for the core `/graph` component. |
+| `/.serena/memories/project_overview.md` | **Medium Relevance:** Provides a general summary, useful for quick context. |
+| `README.md`, `CONTRIBUTING.md`, `LICENSE` | **Standard Relevance:** Provides external-facing project information. |
 
-**Documentation Quality Assessment:** The presence of detailed, numbered development plans (`0001-`, `0002-`) and dedicated AI analysis documents (`/.ai/docs/`) suggests a high quality of internal documentation, focusing on both architectural structure and specific technical features like token estimation and dependency analysis. These documents are essential for understanding the "why" behind the current implementation and recent feature additions.
+**Documentation Quality Assessment:** The presence of detailed, numbered development plans (`/development-docs`) and specific AI-focused analysis documents (`/.ai/docs`) suggests a high-quality, well-documented project, particularly concerning its core architectural components (graph, analysis, dependencies). The documentation is highly relevant to understanding the "what" and "why" of the codebase.

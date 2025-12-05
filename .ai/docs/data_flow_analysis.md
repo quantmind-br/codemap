@@ -1,105 +1,141 @@
-The project `codemap` is a command-line tool written in Go designed to analyze a codebase and output its structure, dependencies, or a visualization (skyline) for consumption by LLMs or developers. The data flow is highly structured, moving from raw file system and Git data through a parsing and modeling layer (`scanner`) to a final output layer (`render`).
+The `codemap` project is a data-intensive application focused on analyzing source code and building a knowledge graph, which is then used to interact with Large Language Models (LLMs). The data flow is characterized by a pipeline: **Source Code Scanning -> Graph Persistence -> LLM Interaction/Retrieval -> Output Rendering**.
 
 # Data Flow Analysis
 
 ## Data Models Overview
 
-The application defines two primary top-level data structures, each corresponding to a different operational mode, and several nested structures for granular data capture. All models are defined in `scanner/types.go`.
+The core data models define the structure of the analyzed code and the application's configuration.
 
-| Model Name | Purpose | Key Fields |
-| :--- | :--- | :--- |
-| **`FileInfo`** | Represents a single file in the codebase (used in Tree/Skyline mode). | `Path`, `Size`, `Ext`, `Tokens` (estimated), `IsNew`, `Added`, `Removed` (for diff mode). |
-| **`Project`** | Top-level model for Tree/Skyline mode. | `Root`, `Mode`, `Animate`, `Files` (`[]FileInfo`), `DiffRef`, `Impact` (`[]ImpactInfo`). |
-| **`FuncInfo`** | Represents a function or method definition. | `Name`, `Signature`, `Receiver`, `IsExported`, `Line`. |
-| **`TypeInfo`** | Represents a type definition (struct, class, interface, etc.). | `Name`, `Kind` (`TypeKind` enum), `Fields` (`[]string`), `Methods` (`[]string`), `IsExported`, `Line`. |
-| **`FileAnalysis`** | Holds extracted structural data for a single file (used in Dependency mode). | `Path`, `Language`, `Functions` (`[]FuncInfo`), `Types` (`[]TypeInfo`), `Imports` (`[]string`). |
-| **`DepsProject`** | Top-level model for Dependency mode. | `Root`, `Mode`, `Files` (`[]FileAnalysis`), `ExternalDeps` (`map[string][]string`), `DiffRef`, `DetailLevel`. |
-| **`DetailLevel`** | Integer enum (`0`, `1`, `2`) controlling the verbosity of extracted data. | `DetailNone` (names only), `DetailSignature` (names + signatures), `DetailFull` (signatures + type fields). |
+| Model Name | Location | Description | Key Fields |
+| :--- | :--- | :--- | :--- |
+| **`Config`** | `config/config.go` | Application configuration, loaded from YAML and environment variables. | `LLM` (`LLMConfig`), `Cache` (`CacheConfig`), `Debug` (bool). |
+| **`LLMConfig`** | `config/config.go` | Settings for LLM providers (OpenAI, Anthropic, Ollama). | `Provider`, `Model`, `OpenAIAPIKey`, `EmbeddingModel`, `Temperature`, `MaxTokens`. |
+| **`CacheConfig`** | `config/config.go` | Settings for the local file cache. | `Enabled` (bool), `Dir` (string), `TTLDays` (int). |
+| **`Symbol`** | `scanner/types.go` | Represents a code entity (function, struct, variable, etc.). The fundamental unit of analysis. | `ID` (string), `Name` (string), `Type` (string), `Kind` (string), `File` (string), `StartLine`, `EndLine`, `Docstring` (string). |
+| **`Call`** | `scanner/types.go` | Represents a function call or method invocation. | `ID` (string), `CallerID` (string), `CalleeID` (string), `File` (string), `Line` (int). |
+| **`Dependency`** | `scanner/types.go` | Represents a package or module import/dependency. | `ID` (string), `SourceFile` (string), `TargetPackage` (string). |
+| **`Graph`** | `graph/types.go` | The main data structure for the knowledge graph, holding all extracted data. | `Symbols` (map[string]*`Symbol`), `Calls` (map[string]*`Call`), `Dependencies` (map[string]*`Dependency`), `Vectors` (map[string][]float32). |
+| **`EmbeddingRequest`** | `analyze/client.go` | Data structure for requesting embeddings from an LLM provider. | `Model` (string), `Input` ([]string). |
+| **`EmbeddingResponse`** | `analyze/client.go` | Data structure for receiving embeddings from an LLM provider. | `Data` ([]`EmbeddingData`), `Usage` (`Usage`). |
 
 ## Data Transformation Map
 
-Data flows through the system in a pipeline: **Source Data -> Scanner/Modeling -> Project Struct -> Renderer/Serialization.**
+Data undergoes several transformations as it moves through the system:
 
-| Stage | Input Data | Transformation Logic | Output Data Model |
+| Stage | Input Data | Output Data | Transformation/Mechanism |
 | :--- | :--- | :--- | :--- |
-| **1. File System Scan** | File paths, sizes, and `.gitignore` rules. | `scanner.ScanFiles`: Walks the directory tree, applies gitignore filtering, calculates file size, determines extension, and estimates `Tokens` using a constant `CharsPerToken` heuristic. | `[]FileInfo` |
-| **2. Git Diff Analysis** | Git history (`main.go` calls `scanner.GitDiffInfo`). | `scanner.GitDiffInfo`: Executes Git commands to find changed files and line-level additions/deletions against a reference branch. | `scanner.DiffInfo` (internal struct) |
-| **3. Dependency Analysis** | Source code file content, `DetailLevel`, Tree-sitter grammars. | `scanner.ScanForDeps`: Iterates over files, uses Tree-sitter to parse the AST, and extracts symbols (functions, types, imports) based on the requested `DetailLevel`. | `[]FileAnalysis` |
-| **4. Filtering** | `[]FileInfo` or `[]FileAnalysis`, and `DiffInfo`. | `scanner.FilterToChangedWithInfo` / `scanner.FilterAnalysisToChanged`: Filters the list of files/analyses to only include those marked as changed by Git. | Filtered `[]FileInfo` or `[]FileAnalysis` |
-| **5. Project Aggregation** | Filtered file data, root path, mode flags. | `main.go` logic: Aggregates all processed data into either a `scanner.Project` or `scanner.DepsProject` structure. | `scanner.Project` or `scanner.DepsProject` |
-| **6. Output Generation** | `Project` or `DepsProject` struct. | `encoding/json` or `render` package functions (`Tree`, `Skyline`, `Depgraph`, `APIView`). | JSON string or formatted terminal output. |
+| **Configuration Loading** | YAML/Environment Variables (Text) | `Config` (Go Struct) | `yaml.Unmarshal` (Deserialization), Environment Variable Overrides, `DefaultConfig` (Initialization). |
+| **Code Scanning** | Source Code (Text) | `Symbol`, `Call`, `Dependency` (Go Structs) | Tree-sitter parsing (`scanner/walker.go`), AST traversal, Query matching (`scanner/queries/*.scm`), Data extraction and normalization. |
+| **Graph Building** | `Symbol`, `Call`, `Dependency` (Go Structs) | `Graph` (Go Struct) | Aggregation and indexing of individual entities into maps keyed by ID. |
+| **Graph Persistence** | `Graph` (Go Struct) | `graph.gob` (Binary File) | `gob` encoding/decoding (`graph/store.go`). |
+| **Embedding Generation** | `Symbol` Docstrings/Code Snippets (Text) | Vector Embeddings ([]float32) | LLM API call (`analyze/client.go`), JSON serialization/deserialization of `EmbeddingRequest`/`EmbeddingResponse`. |
+| **LLM Prompting** | `Graph` data, User Query (Text) | LLM Prompt (Text) | Contextualization and formatting using templates (`analyze/prompts.go`). |
+| **LLM Response Parsing** | LLM Response (JSON/Text) | Structured Analysis (Text/Go Structs) | JSON parsing or text extraction from the LLM's output. |
+| **Output Rendering** | `Graph` data (Go Structs) | Console Output (Text/ASCII/Colors) | Data traversal and formatting logic in the `render` package (e.g., `render/tree.go`, `render/depgraph.go`). |
 
 ## Storage Interactions
 
-The application is primarily a read-only analysis tool and does not interact with a traditional database or persistent storage for its operational data.
+The application uses two primary storage mechanisms: a file-based cache and a persistent graph store.
 
-*   **Primary Data Source:** The local file system, accessed via `os` and `filepath` functions (e.g., `filepath.WalkDir` in `scanner/walker.go`).
-*   **External Tool Interaction:** The application relies on the Git command-line tool to retrieve diff information (`scanner.GitDiffInfo`).
-*   **External Data Files:**
-    *   `.gitignore`: Read to determine which files to exclude from the scan.
-    *   Tree-sitter Grammars: Loaded from a configured directory (checked by `scanner.NewGrammarLoader`) to enable source code parsing.
-    *   External Dependency Files: `scanner.ReadExternalDeps` is used to read external dependency information (e.g., `go.mod` for Go projects).
+### 1. Graph Persistence (Knowledge Graph)
+
+*   **Mechanism:** The entire knowledge graph, represented by the `graph.Graph` struct, is persisted to a single file, typically `.codemap/graph.gob`.
+*   **Technology:** Go's built-in `encoding/gob` package is used for serialization and deserialization. This is a binary format optimized for Go data structures.
+*   **Interaction:**
+    *   **Write:** `graph.Store.Save(g *Graph)` writes the `Graph` struct to the file.
+    *   **Read:** `graph.Store.Load()` reads the file and decodes it back into a `Graph` struct.
+*   **Data Stored:** `Symbols`, `Calls`, `Dependencies`, and `Vectors` (embeddings).
+
+### 2. Caching Mechanism
+
+*   **Mechanism:** A simple file-based cache is implemented in the `cache` package. It stores LLM responses to avoid redundant API calls.
+*   **Configuration:** Controlled by `config.CacheConfig` (`Enabled`, `Dir`, `TTLDays`).
+*   **Data Flow:**
+    1.  A cache key is generated from the LLM request (e.g., prompt, model, temperature).
+    2.  The `cache.Cache` object checks for the key in its directory (`.codemap/cache` by default).
+    3.  If a hit, the cached response (likely raw LLM output) is returned.
+    4.  If a miss, the LLM API is called, and the response is written to a file in the cache directory before being returned.
+*   **Persistence Pattern:** Write-through/Read-through caching pattern.
 
 ## Validation Mechanisms
 
-Data validation is minimal and primarily focused on input and prerequisites:
+Data validation primarily occurs at the configuration and input stages.
 
-1.  **Path Validation:** `main.go` checks if the root path can be resolved to an absolute path.
-2.  **Git Reference Validation:** When `--diff` is used, `main.go` checks for errors from `scanner.GitDiffInfo`, ensuring the provided `--ref` is a valid Git branch or reference.
-3.  **Grammar Availability:** In dependency mode (`--deps`), `main.go` checks if Tree-sitter grammars are available using `loader.HasGrammars()`. If not, it prints an error and exits, preventing the core parsing logic from running without its required data source.
-4.  **Exported Symbol Logic:** The `scanner.IsExportedName` function in `scanner/types.go` implements language-specific logic (e.g., Go's uppercase rule, Python's lack of leading underscore) to determine if a symbol should be considered part of the public API surface. This is a form of data validation/classification during the symbol extraction phase.
+### 1. Configuration Validation
+
+*   **Location:** `config.Config.Validate()` in `config/config.go`.
+*   **Logic:** Checks for mandatory fields based on the selected LLM provider:
+    *   If `ProviderOllama`, checks if `OllamaURL` is set.
+    *   If `ProviderOpenAI`, checks if `OpenAIAPIKey` is set (or relies on environment variable override).
+    *   If `ProviderAnthropic`, checks if `AnthropicAPIKey` is set (or relies on environment variable override).
+    *   Ensures `Model` is set.
+    *   Performs range checks on numeric fields like `Timeout` and `MaxRetries` (must be non-negative).
+
+### 2. Data Integrity (Implicit)
+
+*   **Scanner:** The `scanner` package relies on the robustness of the Tree-sitter parsers. Data integrity is implicitly maintained by ensuring that extracted `Symbol`, `Call`, and `Dependency` structs are correctly populated from the Abstract Syntax Tree (AST).
+*   **Graph:** The `graph` package uses string IDs to maintain relationships between entities (e.g., `Call.CallerID` references a `Symbol.ID`). While there is no explicit foreign key validation, the graph structure itself enforces relationships.
 
 ## State Management Analysis
 
-The application is stateless and operates in a single execution cycle:
+The application's state is managed through configuration, the in-memory graph, and the file-based cache.
 
-1.  **Configuration State:** Command-line flags are parsed and stored as local variables in `main.go` (e.g., `skylineMode`, `depsMode`, `detailLevel`). These variables determine the execution path and the final output format.
-2.  **In-Memory Data Structures:** All extracted data (`FileInfo`, `FileAnalysis`, etc.) is held entirely in memory within the `scanner.Project` or `scanner.DepsProject` structs. These structs represent the complete, immutable state of the analysis result for the current run.
-3.  **No Caching:** There are no explicit caching mechanisms (like Redis or Memcached) or persistence layers (like a database) to store results between runs. Every execution starts from scratch by scanning the file system and parsing the source code.
+| State Component | Storage Location | Management Strategy |
+| :--- | :--- | :--- |
+| **Application Settings** | `config.Config` (In-memory struct) | Loaded once at startup (`config.Load()`) from multiple sources (defaults, user config, project config, env vars) and treated as immutable for the application's runtime. |
+| **Knowledge Graph** | `graph.Graph` (In-memory struct) | **Primary State.** Loaded from `.codemap/graph.gob` at the start of analysis/querying. It is updated during the scanning phase and persisted back to disk upon completion. |
+| **LLM Responses** | `cache.Cache` (File system) | **Secondary State.** Managed by a TTL (Time-To-Live) mechanism defined in `CacheConfig.TTLDays`. Responses are stored as files, providing persistence across runs. |
+| **LLM Client State** | `analyze.Client` (In-memory struct) | Manages transient state like rate limiting (`RequestsPerMin`) and retry logic (`MaxRetries`), ensuring controlled interaction with external APIs. |
 
 ## Serialization Processes
 
-Serialization is handled by the standard Go `encoding/json` package when the `--json` flag is provided.
+The project uses two main serialization formats:
 
-*   **Custom Serialization:** The `FuncInfo` struct in `scanner/types.go` implements custom `MarshalJSON` and `UnmarshalJSON` methods.
-    *   **Purpose:** This allows `FuncInfo` to be serialized as a simple string (just the function name) if no extended detail (signature, receiver, line number) is present. This ensures backward compatibility and a more compact JSON output when the detail level is low.
-    *   **Deserialization:** The custom `UnmarshalJSON` handles both the simple string format and the full object format, ensuring robustness when reading previously generated JSON.
+### 1. YAML (Configuration)
+*   **Purpose:** Storing human-readable configuration.
+*   **Mechanism:** `gopkg.in/yaml.v3`.
+*   **Process:** YAML text is deserialized into `config.Config` structs.
+
+### 2. Gob (Graph Persistence)
+*   **Purpose:** Efficiently storing the complex, interconnected `graph.Graph` data structure.
+*   **Mechanism:** `encoding/gob`.
+*   **Process:** The `Graph` struct is serialized into a binary `.gob` file for fast loading and saving.
+
+### 3. JSON (LLM Communication)
+*   **Purpose:** Standard communication format for external LLM APIs (OpenAI, Anthropic, Ollama).
+*   **Mechanism:** `encoding/json`.
+*   **Process:**
+    *   **Outbound:** Go structs like `EmbeddingRequest` are serialized to JSON for the API request body.
+    *   **Inbound:** JSON responses from the LLM are deserialized into structs like `EmbeddingResponse` or parsed for the final text output.
 
 ## Data Lifecycle Diagrams
 
-### Lifecycle 1: Tree/Skyline Mode
+### 1. Code Analysis and Graph Building Lifecycle
 
 ```mermaid
 graph TD
-    A[CLI Flags: --skyline, --diff] --> B(scanner.LoadGitignore);
-    B --> C(scanner.GitDiffInfo);
-    C --> D(scanner.ScanFiles);
-    D --> E{Is --diff set?};
-    E -- Yes --> F(scanner.FilterToChangedWithInfo);
-    E -- Yes --> G(scanner.AnalyzeImpact);
-    E -- No --> H(scanner.Project Aggregation);
-    F --> H;
-    G --> H;
-    H --> I{Is --json set?};
-    I -- Yes --> J(JSON Serialization to STDOUT);
-    I -- No --> K(render.Skyline or render.Tree);
+    A[Source Code Files] --> B(Scanner Package);
+    B --> C{Tree-sitter Parsing};
+    C --> D[Extracted Entities: Symbol, Call, Dependency];
+    D --> E(Graph Builder);
+    E --> F[In-Memory Graph (graph.Graph)];
+    F --> G{Graph Store (gob)};
+    G --> H[.codemap/graph.gob];
+    H --> F;
 ```
 
-### Lifecycle 2: Dependency Mode
+### 2. LLM Interaction and Caching Lifecycle
 
 ```mermaid
 graph TD
-    A[CLI Flags: --deps, --detail, --api] --> B(scanner.NewGrammarLoader);
-    B --> C(scanner.ScanForDeps);
-    C --> D(scanner.ReadExternalDeps);
-    C --> E{Is --diff set?};
-    E -- Yes --> F(scanner.FilterAnalysisToChanged);
-    E -- No --> G(scanner.DepsProject Aggregation);
-    F --> G;
-    D --> G;
-    G --> H{Is --json set?};
-    H -- Yes --> I(JSON Serialization to STDOUT);
-    H -- No --> J{Is --api set?};
-    J -- Yes --> K(render.APIView);
-    J -- No --> L(render.Depgraph);
+    A[User Query] --> B(Analyze Package);
+    B --> C{Cache Check (cache.Cache)};
+    C -- Cache Hit --> D[Return Cached Response];
+    C -- Cache Miss --> E(LLM Client);
+    E --> F{LLM API Request (JSON)};
+    F --> G[LLM Response (JSON)];
+    G --> H(Cache Write);
+    H --> I[Cache Directory];
+    G --> J[Parse Response];
+    J --> D;
 ```
